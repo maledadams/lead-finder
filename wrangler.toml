@@ -17,6 +17,17 @@ compatibility_flags = ["nodejs_compat"]
 [triggers]
 crons = ["0 6 * * *", "0 11 * * *"]
 
+# ---------------------------------------------------------------------------
+# Custom domain for the dashboard.
+#
+# Internal tooling lives on the work domain; the client-facing identity is
+# lucia-adams.com. Cloudflare Access can only protect a hostname in a zone you
+# control, which is why this is not on workers.dev.
+# ---------------------------------------------------------------------------
+[[routes]]
+pattern = "leads.maledadams.work"
+custom_domain = true
+
 [[d1_databases]]
 binding = "DB"
 database_name = "lead-finder"
@@ -63,12 +74,12 @@ RE_EVAL_AFTER_DAYS = "45"
 # domain. It then refuses any request that did not come through Access,
 # which closes the workers.dev bypass.
 REQUIRE_ACCESS = "false"
-USER_AGENT = "LeadFinderBot/0.1 (+https://example.com/bot; contact: you@example.com)"
+USER_AGENT = "LeadFinderBot/0.1 (+https://lucia-adams.com; lucia@lucia-adams.com)"
 
 # Sending identity, used in outreach drafts and the CAN-SPAM footer.
 # These are placeholders — fill them in before you send anything.
 SENDER_NAME = "Lucia"
-SENDER_EMAIL = "you@example.com"
+SENDER_EMAIL = "lucia@lucia-adams.com"
 SENDER_POSTAL_ADDRESS = "REPLACE — CAN-SPAM requires a real physical mailing address"
 
 # Set a long random string, then send it as `Authorization: Bearer <value>`
