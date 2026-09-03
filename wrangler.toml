@@ -26,6 +26,24 @@ database_id = "YOUR_D1_DATABASE_ID"
 [ai]
 binding = "AI"
 
+# ---------------------------------------------------------------------------
+# Rate limiting.
+#
+# Two separate limiters on purpose. A wrong key is the signal that matters —
+# someone guessing gets throttled hard and independently of normal use, so a
+# brute-force attempt cannot hide inside ordinary dashboard traffic.
+# Counters are per-colo, not global; that is fine for abuse control.
+# ---------------------------------------------------------------------------
+[[ratelimits]]
+name = "API_LIMITER"
+namespace_id = "1001"
+simple = { limit = 120, period = 60 }
+
+[[ratelimits]]
+name = "AUTH_LIMITER"
+namespace_id = "1002"
+simple = { limit = 8, period = 60 }
+
 [vars]
 # Everything here is a safety limit. They are intentionally low.
 # Raise them only after you have watched real usage in the dashboard.
@@ -41,6 +59,10 @@ FRONTIER_LOW_WATER = "150"
 MIN_SCORE_TO_QUEUE = "68"
 MIN_PRESCORE_FOR_AI = "45"
 RE_EVAL_AFTER_DAYS = "45"
+# Set to "true" once the Worker is behind Cloudflare Access on a custom
+# domain. It then refuses any request that did not come through Access,
+# which closes the workers.dev bypass.
+REQUIRE_ACCESS = "false"
 USER_AGENT = "LeadFinderBot/0.1 (+https://example.com/bot; contact: you@example.com)"
 
 # Sending identity, used in outreach drafts and the CAN-SPAM footer.

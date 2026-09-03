@@ -75,6 +75,54 @@ function timingSafeEqual(a, b) {
   return diff === 0;
 }
 
+/** Caller identity for rate limiting: the real client IP Cloudflare saw. */
+function clientKey(request) {
+  return request.headers.get('cf-connecting-ip')
+    || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    || 'unknown';
+}
+
+/**
+ * Ask a limiter for permission. Missing binding means allow — a limiter that
+ * is not configured must not take the whole Worker down.
+ */
+async function withinLimit(limiter, key) {
+  if (!limiter?.limit) return true;
+  try {
+    const { success } = await limiter.limit({ key });
+    return success !== false;
+  } catch {
+    return true;
+  }
+}
+
+const tooMany = (retryAfter = 60) =>
+  new Response(JSON.stringify({ error: 'rate limited' }), {
+    status: 429,
+    headers: {
+      ...SECURITY_HEADERS,
+      'content-type': 'application/json; charset=utf-8',
+      'retry-after': String(retryAfter),
+    },
+  });
+
+/**
+ * Cloudflare Access, when the Worker is served from a custom domain behind a
+ * Zero Trust policy.
+ *
+ * Access terminates the login and forwards a signed JWT. Its presence is
+ * checked here so that turning Access on immediately tightens the Worker; the
+ * signature itself is verified by Access at the edge before the request ever
+ * reaches this code, and the request cannot reach a protected hostname
+ * without one.
+ *
+ * On workers.dev there is no Access in front, so this returns false and the
+ * shared key remains the only gate.
+ */
+function hasAccessAssertion(request) {
+  return Boolean(request.headers.get('cf-access-jwt-assertion'));
+}
+
 export default {
   /**
    * Cron. This is the part that runs with the laptop off.
@@ -101,13 +149,30 @@ export default {
       return json({ ok: true });
     }
 
+    const who = clientKey(request);
+
+    // General throttle, applied before any work is done.
+    if (!(await withinLimit(env.API_LIMITER, who))) return tooMany();
+
     if (!env.DASHBOARD_KEY) {
       return json({
         error: 'DASHBOARD_KEY is not set',
         fix: 'wrangler secret put DASHBOARD_KEY',
       }, 503);
     }
+
+    // When REQUIRE_ACCESS is on, a request must arrive through Cloudflare
+    // Access. Anything hitting the workers.dev hostname directly is refused,
+    // which closes the bypass that would otherwise make Access decorative.
+    if (env.REQUIRE_ACCESS === 'true' && !hasAccessAssertion(request)) {
+      return json({ error: 'access required' }, 403);
+    }
+
     if (!authorized(request, env)) {
+      // One failure token per failure. This is the brute-force gate: eight
+      // wrong keys a minute per IP, counted separately from ordinary traffic
+      // so an attacker cannot hide inside it.
+      if (!(await withinLimit(env.AUTH_LIMITER, `auth:${who}`))) return tooMany(120);
       return json({ error: 'unauthorized' }, 401);
     }
 
