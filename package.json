@@ -1,0 +1,20 @@
+{
+  "name": "lead-finder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Persistent, deduplicating prospecting system for creative founder-led businesses. Runs on Cloudflare with the laptop off.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create lead-finder",
+    "db:init": "wrangler d1 execute lead-finder --remote --file=./schema.sql",
+    "db:init:local": "wrangler d1 execute lead-finder --local --file=./schema.sql",
+    "db:console": "wrangler d1 execute lead-finder --remote --command",
+    "tail": "wrangler tail",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.128.0"
+  }
+}

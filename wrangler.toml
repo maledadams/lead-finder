@@ -1,0 +1,56 @@
+name = "lead-finder"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ---------------------------------------------------------------------------
+# Cron schedule.
+#
+# Two triggers, deliberately few — every invocation costs requests and CPU.
+#
+#   06:00 UTC  crawl   discovery + audit + AI evaluation, budget-capped
+#   11:00 UTC  queue   build the day's ranked outreach queue (<=30)
+#
+# The gap lets the crawl finish and settle before the queue reads scores.
+# Adjust to taste; more frequent runs cost more and buy nothing at this volume.
+# ---------------------------------------------------------------------------
+[triggers]
+crons = ["0 6 * * *", "0 11 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lead-finder"
+# Replace with the id printed by `npm run db:create`.
+database_id = "YOUR_D1_DATABASE_ID"
+
+[ai]
+binding = "AI"
+
+[vars]
+# Everything here is a safety limit. They are intentionally low.
+# Raise them only after you have watched real usage in the dashboard.
+DAILY_FETCH_BUDGET = "300"
+DAILY_AI_BUDGET = "40"
+DAILY_QUEUE_MAX = "30"
+CRAWL_FRONTIER_BATCH = "60"
+DAILY_SOURCE_QUERIES = "12"
+KEYWORDS_VALIDATED_PER_RUN = "3"
+SOURCE_KEYWORDS_PER_RUN = "3"
+SOURCE_METROS_PER_RUN = "2"
+FRONTIER_LOW_WATER = "150"
+MIN_SCORE_TO_QUEUE = "68"
+MIN_PRESCORE_FOR_AI = "45"
+RE_EVAL_AFTER_DAYS = "45"
+USER_AGENT = "LeadFinderBot/0.1 (+https://example.com/bot; contact: you@example.com)"
+
+# Sending identity, used in outreach drafts and the CAN-SPAM footer.
+# These are placeholders — fill them in before you send anything.
+SENDER_NAME = "Lucia"
+SENDER_EMAIL = "you@example.com"
+SENDER_POSTAL_ADDRESS = "REPLACE — CAN-SPAM requires a real physical mailing address"
+
+# Set a long random string, then send it as `Authorization: Bearer <value>`
+# (or `?key=<value>`) to reach the dashboard and the seed endpoint.
+# Use a secret in production:  wrangler secret put DASHBOARD_KEY
+[observability]
+enabled = true

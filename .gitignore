@@ -1,0 +1,19 @@
+# secrets — never commit
+.dev.vars
+.dev.vars.*
+*.key
+*.pem
+.env
+.env.*
+
+# build / runtime
+node_modules/
+.wrangler/
+dist/
+*.log
+
+# os
+.DS_Store
+
+# local editor/agent settings (can contain dev keys in permission entries)
+.claude/settings.local.json
