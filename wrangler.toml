@@ -79,6 +79,12 @@ RE_EVAL_AFTER_DAYS = "45"
 # domain. It then refuses any request that did not come through Access,
 # which closes the workers.dev bypass.
 REQUIRE_ACCESS = "false"
+
+# Google sign-in. Everyone here gets their own login and their decisions are
+# recorded under their own address. GOOGLE_CLIENT_SECRET and SESSION_SECRET
+# are secrets, not vars — set them with `wrangler secret put`.
+GOOGLE_CLIENT_ID = "REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID"
+ALLOWED_EMAILS = "owner@example.com,teammate@example.com"
 USER_AGENT = "LeadFinderBot/0.1 (+https://lucia-adams.com; hello@example.com)"
 
 # Sending identity, used in outreach drafts and the CAN-SPAM footer.

@@ -7,6 +7,9 @@ import { renderDashboard } from './dashboard.js';
 import { harvestWikipedia, mineCorpus, storeCandidates, validateBatch } from './keywords.js';
 import { queryCertTransparency } from './sources.js';
 import { deriveLessons, recordFeedback, rerankOne } from './learning.js';
+import {
+  completeLogin, googleConfigured, loginPage, logout, sessionFrom, startLogin, verifySession,
+} from './auth.js';
 
 /**
  * Headers applied to every response.
@@ -167,11 +170,29 @@ export default {
       return json({ error: 'access required' }, 403);
     }
 
-    if (!authorized(request, env)) {
-      // One failure token per failure. This is the brute-force gate: eight
-      // wrong keys a minute per IP, counted separately from ordinary traffic
-      // so an attacker cannot hide inside it.
+    // ---- Google sign-in -------------------------------------------------
+    // These three must sit outside the auth gate, or nobody could ever reach
+    // them to sign in.
+    if (url.pathname.startsWith('/auth/')) {
+      if (!googleConfigured(env)) {
+        return json({ error: 'google sign-in is not configured' }, 503);
+      }
+      if (url.pathname === '/auth/login') return startLogin(env, request);
+      if (url.pathname === '/auth/callback') return completeLogin(env, request);
+      if (url.pathname === '/auth/logout') return logout();
+      return json({ error: 'not found' }, 404);
+    }
+
+    // A signed-in person, or a valid shared key. People get Google; scripts
+    // and cron keep the key.
+    const signedInAs = await verifySession(env, sessionFrom(request));
+    const hasKey = authorized(request, env);
+
+    if (!signedInAs && !hasKey) {
       if (!(await withinLimit(env.AUTH_LIMITER, `auth:${who}`))) return tooMany(120);
+      // A browser gets a sign-in page; anything else gets JSON.
+      const wantsHtml = (request.headers.get('accept') || '').includes('text/html');
+      if (wantsHtml && googleConfigured(env)) return loginPage();
       return json({ error: 'unauthorized' }, 401);
     }
 
@@ -180,7 +201,7 @@ export default {
       if (url.pathname === '/' || url.pathname === '/dashboard') {
         const day = url.searchParams.get('day') || todayStr();
         const nonce = btoa(crypto.randomUUID()).replace(/=+$/, '');
-        const html = await renderDashboard(db, env, day, nonce);
+        const html = await renderDashboard(db, env, day, nonce, signedInAs);
         return new Response(html, {
           headers: {
             ...SECURITY_HEADERS,
@@ -266,7 +287,7 @@ export default {
 
         await recordFeedback(db, {
           entityId: row.entity_id, outreachId, decision, reason,
-          reviewer: request.headers.get('cf-access-authenticated-user-email') || 'dashboard',
+          reviewer: signedInAs || request.headers.get('cf-access-authenticated-user-email') || 'api',
         });
 
         // Rerank just this lead, now, because the reviewer told us something

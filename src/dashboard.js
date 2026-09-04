@@ -17,7 +17,7 @@ const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-export async function renderDashboard(db, env, day, nonce = '') {
+export async function renderDashboard(db, env, day, nonce = '', signedInAs = null) {
   const [queue, counts, lessons, recent] = await Promise.all([
     db.prepare(
       `SELECT o.id AS oid, o.rank, o.subject, o.body, o.status, o.persona,
@@ -110,7 +110,9 @@ export async function renderDashboard(db, env, day, nonce = '') {
 </style></head><body><div class="wrap">
 
 <h1>Leads to review</h1>
-<div class="sub">${esc(day)}</div>
+<div class="sub">${esc(day)}${signedInAs
+  ? ` &middot; signed in as ${esc(signedInAs)} &middot; <a href="/auth/logout" style="color:var(--dim)">sign out</a>`
+  : ''}</div>
 
 <div class="prog">
   <span><b>${todo.length}</b> to review</span>
