@@ -23,7 +23,7 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
   const stats = {
     day, max, min_score: minScore,
     considered: 0, suppressed: 0, already_contacted: 0,
-    no_contact_method: 0, no_honest_draft: 0, queued: 0,
+    no_contact_method: 0, no_honest_draft: 0, queued: 0, cooldown_days: 0,
   };
 
   if (!dryRun) {
@@ -40,18 +40,32 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
   // contacted, do-not-contact — never appear.
   const states = [...QUEUEABLE_STATES, 'EVALUATED', 'NOT_NOW'];
   const floor = num(env, 'ABSOLUTE_FLOOR', 35);
+  const cooldownDays = num(env, 'SKIP_COOLDOWN_DAYS', 45);
+  const cooldownFrom = new Date(Date.now() - cooldownDays * 86400_000).toISOString();
 
+  // A lead the reviewer just skipped must not reappear the next morning.
+  //
+  // Skipping moves an entity to NURTURE, which is queueable by design — the
+  // point is that it may be worth revisiting. But "later" has to mean later.
+  // Two businesses skipped with explicit feedback were back in the queue the
+  // same day, which makes the reviewer's decision look ignored.
   const { results: candidates } = await db
     .prepare(
-      `SELECT * FROM entities
-       WHERE score IS NOT NULL
-         AND score >= ?
-         AND state IN (${states.map(() => '?').join(',')})
-         AND first_contacted_at IS NULL
-       ORDER BY score DESC, last_evaluated_at DESC
+      `SELECT e.* FROM entities e
+       WHERE e.score IS NOT NULL
+         AND e.score >= ?
+         AND e.state IN (${states.map(() => '?').join(',')})
+         AND e.first_contacted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM feedback f
+           WHERE f.entity_id = e.id
+             AND f.decision IN ('SKIPPED','BLOCKED')
+             AND f.created_at > ?
+         )
+       ORDER BY e.score DESC, e.last_evaluated_at DESC
        LIMIT ?`
     )
-    .bind(floor, ...states, max * 4)
+    .bind(floor, ...states, cooldownFrom, max * 4)
     .all();
 
   stats.considered = (candidates || []).length;
@@ -105,8 +119,17 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
     };
   }
 
-  // Write drafts. The unique index on (entity_id, queue_date) is the final
-  // guard against generating two drafts for one business on one day.
+  // Clear today's unhandled drafts before rewriting.
+  //
+  // Without this a rebuild appends, so ranks collide and the queue grows past
+  // its own cap — an observed build produced 34 rows with two #1s and two #2s.
+  // Anything already sent or skipped is left alone: that is a decision, not a
+  // draft.
+  await db
+    .prepare("DELETE FROM outreach WHERE queue_date = ? AND status = 'DRAFT'")
+    .bind(day)
+    .run();
+
   const ts = nowIso();
   if (selected.length) {
     await db.batch(

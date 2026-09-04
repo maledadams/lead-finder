@@ -277,33 +277,65 @@ export async function storeCandidates(db, candidates, source) {
  * ACTIVE or DEAD. This is what stops the list filling with plausible-sounding
  * terms that find nothing.
  */
-export async function validateBatch(db, limit, queryFn, userAgent) {
+export async function validateBatch(db, limit, queryFn, userAgent, concurrency = 3) {
   const { results } = await db
     .prepare("SELECT keyword FROM keywords WHERE status = 'UNVALIDATED' ORDER BY added_at LIMIT ?")
     .bind(limit)
     .all();
 
-  const out = { tested: 0, active: 0, dead: 0 };
+  const rows = results || [];
+  const out = { tested: 0, active: 0, dead: 0, failed: 0 };
+  const updates = [];
 
-  for (const row of results || []) {
-    const { domains, error, certs } = await queryFn(row.keyword, userAgent);
-    out.tested++;
+  // Validated in small parallel waves rather than one at a time.
+  //
+  // Each crt.sh call can take up to 25 seconds, so sequential validation moved
+  // at roughly eleven keywords per attempt against a backlog of a thousand —
+  // it would never have caught up. Concurrency stays low because crt.sh is a
+  // free community service and hammering it is both rude and self-defeating.
+  let consecutiveFailures = 0;
 
-    // A transient failure must not condemn a keyword — leave it unvalidated
-    // and it will be retried on a later run.
-    if (error) continue;
+  for (let i = 0; i < rows.length; i += concurrency) {
+    // Circuit breaker.
+    //
+    // crt.sh is a free community service and it does go down — during
+    // development it began returning 502 to everything, partly because this
+    // code had been hammering it. When a whole wave fails there is no point
+    // sending another: stop, leave the rest unvalidated, and try on a later
+    // run. Keywords are never condemned by an outage.
+    if (consecutiveFailures >= concurrency * 2) {
+      out.stopped = 'source-unavailable';
+      break;
+    }
 
-    const kept = domains.filter(isPlausibleBrandDomain).length;
-    const status = domains.length === 0 ? 'DEAD' : 'ACTIVE';
-    if (status === 'ACTIVE') out.active++; else out.dead++;
+    const wave = rows.slice(i, i + concurrency);
+    const settled = await Promise.all(
+      wave.map(async (row) => ({ row, res: await queryFn(row.keyword, userAgent) }))
+    );
 
-    await db
-      .prepare(
-        `UPDATE keywords SET status = ?, certs_seen = ?, domains_kept = ?, last_run_at = ?
-         WHERE keyword = ?`
-      )
-      .bind(status, certs ?? domains.length, kept, nowIso(), row.keyword)
-      .run();
+    for (const { row, res } of settled) {
+      out.tested++;
+      // A transient failure must not condemn a keyword — it stays
+      // unvalidated and is retried on a later run.
+      if (res.error) { out.failed++; consecutiveFailures++; continue; }
+      consecutiveFailures = 0;
+
+      const kept = (res.domains || []).filter(isPlausibleBrandDomain).length;
+      const status = (res.domains || []).length === 0 ? 'DEAD' : 'ACTIVE';
+      if (status === 'ACTIVE') out.active++; else out.dead++;
+
+      updates.push(
+        db.prepare(
+          `UPDATE keywords SET status = ?, certs_seen = ?, domains_kept = ?, last_run_at = ?
+           WHERE keyword = ?`
+        ).bind(status, res.certs ?? (res.domains || []).length, kept, nowIso(), row.keyword)
+      );
+    }
+  }
+
+  // One batched write rather than one per keyword.
+  for (let i = 0; i < updates.length; i += 40) {
+    await db.batch(updates.slice(i, i + 40));
   }
   return out;
 }
