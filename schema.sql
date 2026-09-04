@@ -235,3 +235,4 @@ CREATE TABLE IF NOT EXISTS keywords (
 
 CREATE INDEX IF NOT EXISTS idx_keywords_status ON keywords(status, last_run_at);
 CREATE INDEX IF NOT EXISTS idx_keywords_niche  ON keywords(niche);
+

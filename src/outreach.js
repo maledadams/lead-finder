@@ -86,6 +86,11 @@ export function composeDraft(entity, env) {
   const persona = PERSONAS[entity.niche] || PERSONAS.lifestyle_brand;
   const p = safeJson(entity.personalization) || {};
 
+  // A business with no website is a different conversation, and it does not
+  // need a compliment to be honest — the observation is factual and useful on
+  // its own. Requiring one here would silently drop the strongest leads.
+  if (p.no_website) return composeNoWebsiteDraft(entity, env, persona);
+
   // The evidence rule, enforced at the last possible moment.
   if (!p.liked || p.evidence_rejected) return null;
 
@@ -115,8 +120,7 @@ export function composeDraft(entity, env) {
     '',
     ctaFor(persona, entity, det),
     '',
-    persona.sign,
-    env?.SENDER_NAME && env.SENDER_NAME !== 'Lucia' ? env.SENDER_NAME : '',
+    signOff(env, persona),
     '',
     canSpamFooter(env),
   ].filter((l) => l !== undefined).join('\n');
@@ -127,6 +131,65 @@ export function composeDraft(entity, env) {
     cta: ctaFor(persona, entity, det),
     persona: entity.niche || 'lifestyle_brand',
   };
+}
+
+/**
+ * Draft for a business with no website.
+ *
+ * Deliberately shorter and plainer than the others. There is no site to have
+ * an opinion about, so the email says the one true, useful thing and gets out
+ * of the way. No invented praise: we have never seen their work.
+ */
+function composeNoWebsiteDraft(entity, env, persona) {
+  if (!entity.display_name) return null;
+  // Without a way to reach them there is nothing to send.
+  if (!entity.contact_email) return null;
+
+  const name = entity.display_name;
+  const greeting = entity.founder_name ? `hi ${firstName(entity.founder_name)},` : 'hi!';
+  const hasIg = Boolean(entity.instagram);
+
+  const observation = hasIg
+    ? `i came across ${name} on instagram and went looking for your website — as far as i can tell there isn't one yet`
+    : `i came across ${name} and went looking for a website — as far as i can tell there isn't one yet`;
+
+  const point = hasIg
+    ? "which feels like a gap, because you've already done the hard part. people find you, like what they see, and then there's nowhere for them to go."
+    : "which might be deliberate, and if so ignore me entirely.";
+
+  const body = [
+    greeting,
+    '',
+    `${observation} — ${point}`,
+    '',
+    'i build sites for small creative businesses, and this is the kind of project i actually enjoy: something small, well made, that looks like you rather than a template.',
+    '',
+    'if you ever want one, i would happily put together a rough idea of what it could look like first, free, so you can see it before deciding anything.',
+    '',
+    signOff(env, persona),
+    '',
+    canSpamFooter(env),
+  ].filter((l) => l !== undefined && l !== null).join('\n');
+
+  return {
+    subject: `${name} — you don't have a website yet?`,
+    body,
+    cta: 'offer a free rough visual before any commitment',
+    persona: `${entity.niche || 'lifestyle_brand'}:no_website`,
+  };
+}
+
+/**
+ * One signature, never two.
+ *
+ * The persona's own sign-off is a stylistic fallback for when no sender name
+ * is configured. Once SENDER_NAME is set it wins outright, otherwise drafts
+ * end with "— lucia" immediately followed by "Lucía Adams".
+ */
+function signOff(env, persona) {
+  const n = env?.SENDER_NAME;
+  if (n && n !== 'Lucia') return `— ${n}`;
+  return persona.sign;
 }
 
 /**

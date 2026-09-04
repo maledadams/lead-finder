@@ -229,7 +229,8 @@ async function mergeEntities(db, winnerId, loserId) {
   const fillable = [
     'display_name', 'founder_name', 'website', 'domain', 'instagram', 'tiktok',
     'etsy', 'niche', 'location_text', 'country', 'contact_email',
-    'contact_source', 'website_opportunity', 'system_opportunity',
+    'contact_source', 'phone', 'osm_tags', 'has_website',
+    'website_opportunity', 'system_opportunity',
     'power_signals', 'creative_signals', 'personalization', 'outreach_angle',
     'discovery_source',
   ];
@@ -312,8 +313,9 @@ export async function resolveEntity(db, candidate) {
         `INSERT INTO entities
            (id, display_name, founder_name, website, domain, instagram, tiktok,
             etsy, niche, location_text, country, contact_email, contact_source,
-            state, discovery_source, discovered_via, first_seen_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+            state, discovery_source, discovered_via, phone, osm_tags,
+            has_website, first_seen_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .bind(
         entityId,
@@ -332,6 +334,9 @@ export async function resolveEntity(db, candidate) {
         'DISCOVERED',
         candidate.discovery_source || 'unknown',
         candidate.discovered_via || null,
+        candidate.phone || null,
+        candidate.osm_tags ? JSON.stringify(candidate.osm_tags) : null,
+        candidate.has_website === undefined ? null : (candidate.has_website ? 1 : 0),
         ts,
         ts
       )
@@ -412,6 +417,11 @@ async function enrichExisting(db, entityId, candidate, norm) {
   maybe('contact_source', candidate.contact_source);
   maybe('location_text', candidate.location_text);
   maybe('niche', candidate.niche);
+  maybe('phone', candidate.phone);
+  if (candidate.osm_tags && !row.osm_tags) patch.osm_tags = JSON.stringify(candidate.osm_tags);
+  if (candidate.has_website !== undefined && row.has_website === null) {
+    patch.has_website = candidate.has_website ? 1 : 0;
+  }
 
   if (!Object.keys(patch).length) return;
   const cols = Object.keys(patch);

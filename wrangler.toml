@@ -62,6 +62,7 @@ DAILY_FETCH_BUDGET = "300"
 DAILY_AI_BUDGET = "40"
 DAILY_QUEUE_MAX = "30"
 CRAWL_FRONTIER_BATCH = "60"
+NO_SITE_BATCH = "15"
 DAILY_SOURCE_QUERIES = "12"
 KEYWORDS_VALIDATED_PER_RUN = "3"
 SOURCE_KEYWORDS_PER_RUN = "3"
@@ -74,12 +75,12 @@ RE_EVAL_AFTER_DAYS = "45"
 # domain. It then refuses any request that did not come through Access,
 # which closes the workers.dev bypass.
 REQUIRE_ACCESS = "false"
-USER_AGENT = "LeadFinderBot/0.1 (+https://lucia-adams.com; lucia@lucia-adams.com)"
+USER_AGENT = "LeadFinderBot/0.1 (+https://lucia-adams.com; hello@example.com)"
 
 # Sending identity, used in outreach drafts and the CAN-SPAM footer.
 # These are placeholders — fill them in before you send anything.
-SENDER_NAME = "Lucia"
-SENDER_EMAIL = "lucia@lucia-adams.com"
+SENDER_NAME = "Lucía Adams"
+SENDER_EMAIL = "hello@example.com"
 SENDER_POSTAL_ADDRESS = "REPLACE — CAN-SPAM requires a real physical mailing address"
 
 # Set a long random string, then send it as `Authorization: Bearer <value>`

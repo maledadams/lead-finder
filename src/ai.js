@@ -102,6 +102,87 @@ Score each 0-100:
 Set would_lucia_want to false only if there is genuinely no meaningful opportunity in either service line, or the business clearly cannot afford $1,000+.`;
 }
 
+/**
+ * Prompt for a business with no website.
+ *
+ * There is no page to audit, so the model gets OSM tags and a social handle
+ * and nothing else. It is told plainly that the absence IS the opportunity,
+ * and warned off the failure mode that matters here: with so little to go on,
+ * a model will happily invent a compliment about a shop it knows nothing
+ * about.
+ */
+function buildNoWebsitePrompt(entity, tags) {
+  const t = tags || {};
+  return `BUSINESS WITH NO WEBSITE
+name: ${entity.display_name || '(unknown)'}
+category: ${t.shop || t.craft || entity.niche || 'unknown'}
+location: ${[t['addr:street'], t['addr:city'], t['addr:state']].filter(Boolean).join(', ') || entity.location_text || 'unknown'}
+instagram: ${entity.instagram || '(none)'}
+phone: ${entity.phone || t.phone || '(none)'}
+opening hours: ${t.opening_hours || '(not listed)'}
+takes card payments: ${t['payment:credit_cards'] || 'unknown'}
+self-description: ${t.description || '(none)'}
+
+THIS BUSINESS HAS NO WEBSITE. That is the whole opportunity and it is a large
+one — especially if they have an Instagram following, because they have an
+audience and nowhere to send it.
+
+You have very little to go on, so be careful:
+- Do NOT invent anything about their products, style or story. You have not
+  seen them. You have a name, a category and an address.
+- liked_thing must be left EMPTY unless the self-description above gives you
+  something real. A name alone is not enough. An empty field is correct here
+  and simply means Lucia will write the first line herself.
+- Judge fit and creative from the category and name only, and score
+  conservatively when unsure.
+- Judge money from the physical premises signals: a shop with a street
+  address, regular opening hours and card payments is a real operating
+  business paying rent.`;
+}
+
+/**
+ * Evaluate a business that has no website. Same contract as evaluate(), but
+ * the model is given metadata instead of page content.
+ */
+export async function evaluateNoWebsite(env, db, entity, tags) {
+  let raw;
+  try {
+    const res = await env.AI.run(AI_MODEL, {
+      messages: [
+        { role: 'system', content: SYSTEM },
+        { role: 'user', content: buildNoWebsitePrompt(entity, tags) },
+      ],
+      max_tokens: 700,
+      temperature: 0.2,
+      response_format: { type: 'json_schema', json_schema: SCHEMA },
+    });
+    raw = res?.response ?? res;
+  } catch (err) {
+    return { error: String(err?.message || err).slice(0, 300) };
+  }
+
+  const parsed = coerceJson(raw);
+  if (!parsed) return { error: 'unparseable-model-output' };
+
+  // No page text means no way to verify a compliment, so drop it outright
+  // rather than trusting the model to have followed the instruction.
+  const result = sanitize(parsed, { text_sample: '', has_viewport: true, img_count: 0, img_lazy: 0 });
+  if (!tags?.description) { result.liked_thing = null; result.liked_evidence = null; }
+  result.no_website = true;
+
+  await db
+    .prepare(
+      `INSERT INTO evaluations (id, entity_id, content_hash, model, created_at, result, neurons_est)
+       VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(entity_id, content_hash) DO UPDATE SET
+         result = excluded.result, created_at = excluded.created_at`
+    )
+    .bind(newId(), entity.id, 'no-website', AI_MODEL, nowIso(), JSON.stringify(result), NEURONS_PER_EVAL)
+    .run();
+
+  return result;
+}
+
 /** Reads a cached evaluation for this exact page version, if one exists. */
 export async function cachedEvaluation(db, entityId, contentHash) {
   if (!contentHash) return null;

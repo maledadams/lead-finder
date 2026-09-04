@@ -99,12 +99,23 @@ const SHOP_TAGS = [
 ];
 
 // craft=* values that are actual makers, not trades.
+//
+// `tailor`, `dressmaker`, `shoemaker` and `upholsterer` were here and had to
+// go: in practice OSM uses them for dry cleaners, alteration counters and
+// repair shops. A single Brooklyn sweep returned Mulberry Cleaners, Yes
+// Cleaners, Coleman Cleaners, JSK Cleaners, Dunrite Cleaners, Eden Dry
+// Cleaners and Lucky U Cleaners — all tagged as craft, none of them a
+// creative business.
 const CRAFT_TAGS = [
-  'potter', 'jeweller', 'goldsmith', 'shoemaker', 'tailor', 'dressmaker',
-  'basket_maker', 'bookbinder', 'candlemaker', 'glassblower', 'leather',
-  'photographer', 'sculptor', 'painter', 'artist', 'printmaker', 'weaver',
-  'upholsterer', 'distillery', 'brewery', 'winery', 'confectionery',
+  'potter', 'jeweller', 'goldsmith', 'basket_maker', 'bookbinder',
+  'candlemaker', 'glassblower', 'leather', 'photographer', 'sculptor',
+  'painter', 'artist', 'printmaker', 'weaver', 'distillery', 'brewery',
+  'winery', 'confectionery',
 ];
+
+// Service businesses that slip through on category alone. Matched against the
+// name, because the tagging does not distinguish them.
+const NOT_CREATIVE = /\b(?:cleaners?|dry\s*clean|laundr|alterations?|tailor(?:ing|s)?|shoe\s*repair|cobbler|locksmith|barber|nail\s*salon|pharmacy|deli|bodega|smoke\s*shop|check\s*cashing|wireless|mobile\s*repair)\b/i;
 
 /** Map an OSM category onto the internal niche taxonomy. */
 export function nicheForTags(tags) {
@@ -132,13 +143,33 @@ export function nicheForTags(tags) {
   return 'lifestyle_brand';
 }
 
+/**
+ * Two populations, both wanted, for different reasons.
+ *
+ * WITH a website: the site can be fetched, audited and scored on evidence.
+ *
+ * WITHOUT one, but with an Instagram or a maker trade: often the stronger
+ * lead. A boutique with a real following and nowhere to send people has the
+ * largest possible website opportunity, and knows it. Brooklyn alone returns
+ * ~22 of these — independent boutiques, jewellers, vintage shops, a sculptor.
+ *
+ * A business with neither a site nor a social presence is skipped: there is
+ * nothing to judge it on and no honest way to personalise an email.
+ */
 function buildQuery([s, w, n, e]) {
   const bbox = `${s},${w},${n},${e}`;
   const shops = SHOP_TAGS.join('|');
   const crafts = CRAFT_TAGS.join('|');
   return `[out:json][timeout:50];(` +
+    // has a website
     `nwr["shop"~"^(${shops})$"]["website"](${bbox});` +
     `nwr["craft"~"^(${crafts})$"]["website"](${bbox});` +
+    // no website, but a real presence worth talking to
+    `nwr["shop"~"^(${shops})$"]["name"][!"website"]["contact:instagram"](${bbox});` +
+    // Instagram is required here too: a maker who curates one is
+    // brand-conscious, which is the whole signal. Without it the results are
+    // dominated by service shops.
+    `nwr["craft"~"^(${crafts})$"]["name"][!"website"]["contact:instagram"](${bbox});` +
     `);out center 400;`;
 }
 
@@ -185,10 +216,39 @@ export function toCandidates(elements, metro) {
   for (const el of elements) {
     const tags = el?.tags || {};
     if (isChain(tags)) continue;
+    if (NOT_CREATIVE.test(tags.name || '')) continue;
 
     const site = tags.website || tags['contact:website'];
     const domain = normalizeDomain(site);
-    if (!domain || seen.has(domain)) continue;
+    const instagram = tags['contact:instagram'] || tags.instagram || null;
+
+    // No site: keep it only when there is another presence to judge and a way
+    // to reach them. Otherwise there is nothing honest to say in an email.
+    if (!domain) {
+      if (!instagram && !tags.phone) continue;
+      const key = `nosite:${(tags.name || '').toLowerCase()}:${tags['addr:street'] || ''}`;
+      if (!tags.name || seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        website: null,
+        domain: null,
+        display_name: tags.name,
+        niche: nicheForTags(tags),
+        location_text: [tags['addr:city'], tags['addr:state']].filter(Boolean).join(', ') || metro,
+        country: 'US',
+        contact_email: tags.email || tags['contact:email'] || null,
+        contact_source: tags.email || tags['contact:email'] ? 'osm' : null,
+        instagram,
+        phone: tags.phone || tags['contact:phone'] || null,
+        discovery_source: `osm:${metro}`,
+        osm_category: tags.shop || tags.craft || null,
+        osm_tags: compactTags(tags),
+        has_website: false,
+      });
+      continue;
+    }
+
+    if (seen.has(domain)) continue;
 
     // A US address in the tags is far better evidence than page text.
     const state = tags['addr:state'] || null;
@@ -204,9 +264,12 @@ export function toCandidates(elements, metro) {
       country: 'US',
       contact_email: tags.email || tags['contact:email'] || null,
       contact_source: tags.email || tags['contact:email'] ? 'osm' : null,
-      instagram: tags['contact:instagram'] || null,
+      instagram,
+      phone: tags.phone || tags['contact:phone'] || null,
       discovery_source: `osm:${metro}`,
       osm_category: tags.shop || tags.craft || null,
+      osm_tags: compactTags(tags),
+      has_website: true,
     });
   }
   return out;
@@ -271,16 +334,41 @@ export async function flagCrossMetroChains(db, minMetros = 3) {
   return { flagged: chains.length, domains: chains };
 }
 
-/** Least-recently-queried metros first, so coverage rotates. */
-export async function nextMetros(db, limit) {
+/**
+ * The OSM tags worth keeping as evidence. For a business with no website
+ * these are the only facts we will ever have, so they carry the scoring.
+ */
+const KEEP_TAGS = [
+  'shop', 'craft', 'cuisine', 'opening_hours', 'phone', 'addr:street',
+  'addr:city', 'addr:state', 'addr:postcode', 'contact:instagram',
+  'description', 'wheelchair', 'payment:credit_cards', 'air_conditioning',
+  'second_hand', 'organic', 'brand',
+];
+
+function compactTags(tags) {
+  const out = {};
+  for (const k of KEEP_TAGS) if (tags[k]) out[k] = String(tags[k]).slice(0, 200);
+  return out;
+}
+
+/**
+ * Metros due a sweep, least recently done first.
+ *
+ * `staleAfterHours` is what makes rotation work across the whole list: a metro
+ * swept in the last day is skipped, so the two swept yesterday do not block
+ * the twenty-four that have never been touched.
+ */
+export async function nextMetros(db, limit, staleAfterHours = 20) {
   const { results } = await db
     .prepare("SELECT keyword, last_run_at FROM source_cursor WHERE keyword LIKE 'osm:%'")
     .all();
   const seen = new Map((results || []).map((r) => [r.keyword, r.last_run_at]));
+  const cutoff = new Date(Date.now() - staleAfterHours * 3600_000).toISOString();
 
   return METROS
-    .map(([metro, bbox]) => ({ metro, bbox, key: `osm:${metro}` }))
-    .sort((a, b) => (seen.get(a.key) || '').localeCompare(seen.get(b.key) || ''))
+    .map(([metro, bbox]) => ({ metro, bbox, key: `osm:${metro}`, last: seen.get(`osm:${metro}`) || '' }))
+    .filter((m) => !m.last || m.last < cutoff)
+    .sort((a, b) => a.last.localeCompare(b.last))
     .slice(0, limit);
 }
 

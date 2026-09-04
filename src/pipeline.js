@@ -14,8 +14,8 @@ import { num, STATES, NICHES, DEFAULT_NICHE } from './config.js';
 import { Budget } from './budget.js';
 import { Fetcher, contentHash } from './fetcher.js';
 import { extractSignals, guessNiche } from './extract.js';
-import { hardFilter, deterministicScore, finalScore } from './score.js';
-import { cachedEvaluation, evaluate } from './ai.js';
+import { hardFilter, deterministicScore, finalScore, scoreWithoutWebsite } from './score.js';
+import { cachedEvaluation, evaluate, evaluateNoWebsite } from './ai.js';
 import {
   addToFrontier, markFrontier, selectPeerLinks, staleEntities, takeFrontierBatch,
 } from './discover.js';
@@ -34,7 +34,7 @@ export async function runCrawl(env, db) {
   const stats = {
     fetched: 0, skipped_unchanged: 0, evaluated_ai: 0, cached_ai: 0,
     rejected: 0, qualified: 0, new_entities: 0, merged: 0,
-    frontier_added: 0, errors: 0,
+    frontier_added: 0, errors: 0, no_website_scored: 0,
   };
 
   await db
@@ -73,6 +73,33 @@ export async function runCrawl(env, db) {
           limit: staleShare,
         })
       : [];
+
+    // Businesses with no website never enter the frontier — there is nothing
+    // to fetch — so they are pulled separately and scored from OSM metadata.
+    const noSite = await db
+      .prepare(
+        `SELECT id, display_name, instagram, phone, osm_tags, niche, contact_email,
+                location_text, score, state, last_evaluated_at
+         FROM entities
+         WHERE has_website = 0
+           AND state NOT IN ('CONTACTED','REPLIED','CONVERSATION','CLIENT','DO_NOT_CONTACT','REJECTED')
+           AND (last_evaluated_at IS NULL OR last_evaluated_at < ?)
+         ORDER BY COALESCE(last_evaluated_at, '') ASC
+         LIMIT ?`
+      )
+      .bind(new Date(Date.now() - reEvalDays * 86400_000).toISOString(),
+            num(env, 'NO_SITE_BATCH', 15))
+      .all();
+
+    for (const e of noSite.results || []) {
+      if (!budget.canSpend('ai')) break;
+      try {
+        await processNoWebsite(env, db, { entity: e, budget, stats, minQueue });
+      } catch (err) {
+        stats.errors++;
+        console.error('processNoWebsite failed', e.id, err?.message);
+      }
+    }
 
     const targets = [
       ...frontier.map((f) => ({ kind: 'frontier', url: f.url, row: f })),
@@ -132,15 +159,26 @@ async function topUpFrontier(env, db, budget) {
     .prepare("SELECT COUNT(*) AS n FROM crawl_frontier WHERE status = 'PENDING'")
     .first();
 
-  if ((pending?.n || 0) >= lowWater) return { ...out, skipped: 'frontier-healthy' };
   if (!budget.canSpend('source')) return { ...out, skipped: 'source-budget-exhausted' };
 
+  const frontierHealthy = (pending?.n || 0) >= lowWater;
+
+  // The OSM sweep is NOT gated on frontier depth, and that is deliberate.
+  //
+  // It finds a population the frontier can never contain: businesses with no
+  // website. There is no URL to queue for them, so if OSM only ran when the
+  // crawl was starving, those leads — often the strongest ones — would simply
+  // never be discovered. It runs on its own cadence instead: whenever a metro
+  // has not been swept recently.
   // --- OpenStreetMap first ------------------------------------------------
   // Higher quality than the CT sweep: every record arrives with a name, a
   // category, and a verified US street address, so geography is established
   // as fact before we spend a fetch on it.
   const metroCount = Math.min(num(env, 'SOURCE_METROS_PER_RUN', 2), budget.remaining('source'));
-  for (const { metro, bbox } of await nextMetros(db, metroCount)) {
+  const due = await nextMetros(db, metroCount);
+  if (!due.length && frontierHealthy) return { ...out, skipped: 'all-metros-swept-recently' };
+
+  for (const { metro, bbox } of due) {
     if (!budget.canSpend('source')) break;
 
     const { candidates, error } = await queryMetro(metro, bbox, env.USER_AGENT);
@@ -170,6 +208,7 @@ async function topUpFrontier(env, db, budget) {
   }
 
   // --- Certificate Transparency, to top up if still thin ------------------
+  // Unlike OSM, this only produces URLs, so frontier depth is the right gate.
   const stillPending = await db
     .prepare("SELECT COUNT(*) AS n FROM crawl_frontier WHERE status = 'PENDING'")
     .first();
@@ -427,6 +466,70 @@ async function processOne(env, db, ctx) {
       nowIso(),
       nowIso(),
       entityId
+    )
+    .run();
+}
+
+/**
+ * Score a business that has no website.
+ *
+ * No fetch, no page, no hard filter that depends on page content. The whole
+ * judgement rests on OSM tags plus one AI call, so this is cheap in fetch
+ * budget and only costs AI.
+ */
+async function processNoWebsite(env, db, { entity, budget, stats, minQueue }) {
+  let tags = {};
+  try { tags = JSON.parse(entity.osm_tags || '{}'); } catch { /* keep {} */ }
+
+  const det = scoreWithoutWebsite(entity, tags);
+
+  const cached = await cachedEvaluation(db, entity.id, 'no-website');
+  let ai = cached;
+  if (!ai && budget.canSpend('ai')) {
+    ai = await evaluateNoWebsite(env, db, entity, tags);
+    budget.spend('ai');
+    stats.evaluated_ai++;
+    if (ai?.error) { ai = null; stats.errors++; }
+  } else if (ai) {
+    stats.cached_ai++;
+  }
+
+  const final = finalScore(det, ai);
+  stats.no_website_scored++;
+
+  let state = STATES.EVALUATED;
+  if (final.score >= minQueue) { state = STATES.QUALIFIED; stats.qualified++; }
+  else if (final.score >= minQueue - 15) state = STATES.NURTURE;
+  else if (final.vetoed) state = STATES.REJECTED;
+  else state = STATES.NOT_NOW;
+
+  const advanced = ['SHORTLISTED', 'OUTREACH_READY', 'CONTACTED', 'REPLIED', 'CONVERSATION', 'CLIENT', 'DO_NOT_CONTACT'];
+  if (advanced.includes(entity.state)) state = entity.state;
+
+  await db
+    .prepare(
+      `UPDATE entities SET
+         state = ?, score = ?, score_reason = ?, niche = COALESCE(niche, ?),
+         website_opportunity = ?, system_opportunity = ?,
+         power_signals = ?, personalization = ?,
+         last_evaluated_at = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(
+      state,
+      final.score,
+      final.reason?.slice(0, 500) || null,
+      ai?.niche || entity.niche || null,
+      det.website_problems.join(' | '),
+      det.system_opportunities.join(' | '),
+      JSON.stringify(det.power_signals),
+      JSON.stringify({
+        liked: ai?.liked_thing || null,
+        evidence: ai?.liked_evidence || null,
+        opportunity: ai?.opportunity_headline || null,
+        no_website: true,
+      }),
+      nowIso(), nowIso(), entity.id
     )
     .run();
 }

@@ -63,3 +63,29 @@ test('untagged franchises are caught by name shape', () => {
   assert.ok(!isChain({ name: 'Moth & Moon Studio' }));
   assert.ok(!isChain({ name: 'Fifty24Pdx Gallery' }));
 });
+
+test('service businesses are rejected even when tagged as craft', async () => {
+  const { toCandidates } = await import('../src/osm.js');
+  // Every one of these came back from a real Brooklyn sweep tagged craft=tailor.
+  const els = [
+    'Mulberry Cleaners', 'Yes Cleaners', 'Coleman Cleaners', 'JSK Cleaners',
+    'Dunrite Cleaners', "Mario's French Cleaners", 'Eden Dry Cleaners & Tailoring',
+    'Lucky U Cleaners', 'LNC Tailor Shop', 'Fulton Cobbler',
+  ].map((name) => ({ tags: { name, craft: 'tailor', 'contact:instagram': '@x' } }));
+
+  assert.equal(toCandidates(els, 'brooklyn-ny').length, 0, 'no service shops should survive');
+});
+
+test('genuine makers without a website still come through', async () => {
+  const { toCandidates } = await import('../src/osm.js');
+  const els = [
+    { tags: { name: 'Palm Jewelry', shop: 'jewelry', 'contact:instagram': '@palmjewelry',
+              phone: '+17182847699', 'addr:city': 'Brooklyn', 'addr:state': 'NY' } },
+    { tags: { name: 'Brooklyn Rockwerks', craft: 'sculptor', 'contact:instagram': '@rockwerks' } },
+  ];
+  const out = toCandidates(els, 'brooklyn-ny');
+  assert.equal(out.length, 2);
+  assert.equal(out[0].has_website, false);
+  assert.equal(out[0].niche, 'craft_goods');
+  assert.equal(out[1].niche, 'artist_portfolio');
+});

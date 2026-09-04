@@ -238,3 +238,99 @@ export function finalScore(det, ai) {
     vetoed: false,
   };
 }
+
+
+/**
+ * Scoring for a business with no website.
+ *
+ * There is no page to audit, so every signal comes from OSM tags and the
+ * social handle. That sounds weaker, and for `money` it is — but for `need`
+ * it is the opposite. A shop with a real Instagram following and nowhere to
+ * send people has the largest website opportunity there is, and usually knows
+ * it. Lucia's own brief called this out: artists who need a real portfolio
+ * site rather than a link-in-bio page.
+ *
+ * The deliberate asymmetry: need is high by construction, so money and
+ * legitimacy have to be earned from evidence, or these would all score well
+ * on nothing.
+ */
+export function scoreWithoutWebsite(entity, osmTags = {}) {
+  const t = osmTags || {};
+  const power = [];
+  const problems = [];
+  const systems = [];
+
+  // --- NEED: they have no site. That is the whole opportunity. ----------
+  let need = 82;
+  problems.push('no website at all — the business exists only on Instagram and in person');
+  if (entity.instagram) {
+    need += 8;
+    problems.push('an audience on Instagram with nowhere to send it');
+  }
+  need = clamp(need);
+
+  // --- MONEY: a physical premises is itself a real signal (rent). -------
+  let money = 0;
+  const add = (name, pts) => { money += pts; power.push(name); };
+
+  if (t['addr:street']) add('physical_location', 18);
+  if (t.opening_hours) add('regular_trading_hours', 14);
+  if (t.phone || entity.phone) add('published_phone_line', 10);
+  if (t['payment:credit_cards']) add('card_payments', 8);
+  if (t.description) add('describes_itself', 6);
+  if (t.wheelchair) add('fitted_out_premises', 6);
+  if (entity.instagram) add('active_social_presence', 12);
+  if (t.brand) add('established_identity', 6);
+  money = clamp(money);
+
+  // --- SYSTEM: no site means no booking, no catalogue, no orders. -------
+  let system = 30;
+  systems.push('no online ordering, booking or catalogue of any kind');
+  if (['artist_portfolio', 'creative_studio'].includes(entity.niche)) {
+    system += 15;
+    systems.push('commissions and enquiries handled entirely by phone or DM');
+  }
+  system = clamp(system);
+
+  // --- CONTACTABILITY: no site means no email. This is the weak spot. ---
+  let contact = 0;
+  if (entity.contact_email) contact = 80;
+  else if (entity.instagram && (t.phone || entity.phone)) contact = 45;
+  else if (entity.instagram) contact = 35;
+  else if (t.phone || entity.phone) contact = 25;
+
+  // --- PERSONALIZATION: thin, and honestly so. --------------------------
+  let personalization = 0;
+  if (entity.display_name) personalization += 15;
+  if (t.description) personalization += 25;
+  if (entity.instagram) personalization += 20;
+  if (t.shop || t.craft) personalization += 15;
+  personalization = clamp(personalization);
+
+  let fit = 45;
+  if (t['addr:state']) fit += 20;          // confirmed US premises
+  if (t.craft) fit += 15;                  // an actual maker
+  if (entity.instagram) fit += 10;
+  fit = clamp(fit);
+
+  const dimensions = {
+    fit,
+    money,
+    need: clamp(Math.max(need, system)),
+    creative: 50,
+    contactability: contact,
+    personalization,
+    conversion: 50,
+  };
+
+  return {
+    prescore: weighted(dimensions),
+    dimensions,
+    power_signals: power,
+    website_problems: problems,
+    system_opportunities: systems,
+    website_need: need,
+    system_need: system,
+    no_website: true,
+  };
+}

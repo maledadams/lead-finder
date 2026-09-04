@@ -211,9 +211,10 @@ export async function staleEntities(db, { days, nearMissFrom, nearMissTo, limit 
   const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
   const { results } = await db
     .prepare(
-      `SELECT id, website, domain, display_name, instagram, score, state, last_evaluated_at
+      `SELECT id, website, domain, display_name, instagram, phone, osm_tags,
+              has_website, niche, contact_email, score, state, last_evaluated_at
        FROM entities
-       WHERE website IS NOT NULL
+       WHERE (website IS NOT NULL OR has_website = 0)
          AND state NOT IN ('CONTACTED','REPLIED','CONVERSATION','CLIENT','DO_NOT_CONTACT','REJECTED')
          AND (
               last_evaluated_at IS NULL
