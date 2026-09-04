@@ -7,6 +7,7 @@
 import { num, QUEUEABLE_STATES } from './config.js';
 import { newId, nowIso } from './entity.js';
 import { composeDraft } from './outreach.js';
+import { deriveLessons } from './learning.js';
 
 export function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -30,7 +31,16 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
       .bind(runId, 'queue', startedAt).run();
   }
 
-  const states = [...QUEUEABLE_STATES];
+  // Everything that has not been ruled out, not only what cleared the bar.
+  //
+  // The threshold now decides PRESENTATION, not eligibility: leads below it
+  // are still shown, flagged as below the line, and the reviewer decides. A
+  // score is an estimate, and the person reading the draft is better placed
+  // to judge than the estimate is. Genuinely disqualified states — rejected,
+  // contacted, do-not-contact — never appear.
+  const states = [...QUEUEABLE_STATES, 'EVALUATED', 'NOT_NOW'];
+  const floor = num(env, 'ABSOLUTE_FLOOR', 35);
+
   const { results: candidates } = await db
     .prepare(
       `SELECT * FROM entities
@@ -41,7 +51,7 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
        ORDER BY score DESC, last_evaluated_at DESC
        LIMIT ?`
     )
-    .bind(minScore, ...states, max * 4)   // overfetch, because rows get dropped below
+    .bind(floor, ...states, max * 4)
     .all();
 
   stats.considered = (candidates || []).length;
@@ -79,7 +89,7 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
       continue;
     }
 
-    selected.push({ entity: e, draft });
+    selected.push({ entity: e, draft, below_bar: e.score < minScore });
   }
 
   if (dryRun) {
@@ -107,7 +117,8 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
            VALUES (?,?,?,?,?,?,?,?, 'DRAFT', ?)
            ON CONFLICT(entity_id, queue_date) DO NOTHING`
         ).bind(
-          newId(), s.entity.id, day, i + 1, s.draft.persona,
+          newId(), s.entity.id, day, i + 1,
+          s.below_bar ? `${s.draft.persona}:below_bar` : s.draft.persona,
           s.draft.subject, s.draft.body, s.draft.cta, ts
         )
       )
@@ -125,6 +136,14 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
   }
 
   stats.queued = selected.length;
+  stats.below_bar = selected.filter((s) => s.below_bar).length;
+
+  // Turn yesterday's decisions into rules before tomorrow's leads are judged.
+  try {
+    stats.learning = await deriveLessons(env, db);
+  } catch (err) {
+    stats.learning = { error: String(err?.message || err).slice(0, 120) };
+  }
 
   await db.prepare('UPDATE runs SET finished_at = ?, stats = ? WHERE id = ?')
     .bind(nowIso(), JSON.stringify(stats), runId).run();

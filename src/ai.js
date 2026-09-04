@@ -9,6 +9,7 @@
 
 import { AI_MODEL, NEURONS_PER_EVAL, NICHES } from './config.js';
 import { newId, nowIso } from './entity.js';
+import { activeLessons, lessonsToPrompt } from './learning.js';
 
 const SYSTEM = `You are helping Lucia, a freelance web developer and designer, decide who is worth contacting.
 
@@ -145,11 +146,13 @@ You have very little to go on, so be careful:
  * the model is given metadata instead of page content.
  */
 export async function evaluateNoWebsite(env, db, entity, tags) {
+  const learned = lessonsToPrompt(await activeLessons(db, entity.niche));
+
   let raw;
   try {
     const res = await env.AI.run(AI_MODEL, {
       messages: [
-        { role: 'system', content: SYSTEM },
+        { role: 'system', content: SYSTEM + learned },
         { role: 'user', content: buildNoWebsitePrompt(entity, tags) },
       ],
       max_tokens: 700,
@@ -203,11 +206,15 @@ export async function cachedEvaluation(db, entityId, contentHash) {
  * Returns the parsed result, or null if the model gave us nothing usable.
  */
 export async function evaluate(env, db, entity, signals, det, contentHash) {
+  // Everything the reviewers have taught us, applied to a business they have
+  // never seen. This is the whole point of the feedback loop.
+  const learned = lessonsToPrompt(await activeLessons(db, entity.niche));
+
   let raw;
   try {
     const res = await env.AI.run(AI_MODEL, {
       messages: [
-        { role: 'system', content: SYSTEM },
+        { role: 'system', content: SYSTEM + learned },
         { role: 'user', content: buildUserPrompt(entity, signals, det) },
       ],
       max_tokens: 900,

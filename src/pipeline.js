@@ -14,6 +14,7 @@ import { num, STATES, NICHES, DEFAULT_NICHE } from './config.js';
 import { Budget } from './budget.js';
 import { Fetcher, contentHash } from './fetcher.js';
 import { extractSignals, guessNiche } from './extract.js';
+import { needsBrowser, renderPage } from './render.js';
 import { hardFilter, deterministicScore, finalScore, scoreWithoutWebsite } from './score.js';
 import { cachedEvaluation, evaluate, evaluateNoWebsite } from './ai.js';
 import {
@@ -47,6 +48,7 @@ export async function runCrawl(env, db) {
       fetch: num(env, 'DAILY_FETCH_BUDGET', 300),
       ai: num(env, 'DAILY_AI_BUDGET', 40),
       source: num(env, 'DAILY_SOURCE_QUERIES', 8),
+      browser: num(env, 'DAILY_BROWSER_RENDERS', 20),
     });
 
     // Top the frontier up from automated sources before doing anything else,
@@ -315,8 +317,26 @@ async function processOne(env, db, ctx) {
     return;
   }
 
-  const hash = await contentHash(res.html);
-  const signals = extractSignals(res.html, res.finalUrl || url);
+  let html = res.html;
+  let renderMode = 'static';
+  let signals = extractSignals(html, res.finalUrl || url);
+
+  // A JS-rendered site looks identical to a dead one through a plain fetch.
+  // Escalate to a real browser only for those, and only within its own cap.
+  if (needsBrowser(signals, html) && budget.canSpend('browser')) {
+    const rendered = await renderPage(env, res.finalUrl || url);
+    budget.spend('browser');
+    stats.browser_rendered = (stats.browser_rendered || 0) + 1;
+    if (rendered.html) {
+      html = rendered.html;
+      renderMode = 'browser';
+      signals = extractSignals(html, res.finalUrl || url);
+    } else {
+      stats.browser_errors = (stats.browser_errors || 0) + 1;
+    }
+  }
+
+  const hash = await contentHash(html);
 
   // --- resolve to an entity (dedup happens here) ------------------------
   let entityId = target.kind === 'stale' ? target.row.id : null;
@@ -357,12 +377,13 @@ async function processOne(env, db, ctx) {
   await db
     .prepare(
       `INSERT INTO snapshots
-         (id, entity_id, url, fetched_at, http_status, ok, content_hash, bytes, ttfb_ms, signals, text_sample)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+         (id, entity_id, url, fetched_at, http_status, ok, content_hash, bytes,
+          ttfb_ms, signals, text_sample, render_mode)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .bind(
       newId(), entityId, url, nowIso(), res.status, 1, hash, res.bytes, res.ttfb,
-      JSON.stringify(stripLinks(signals)), signals.text_sample
+      JSON.stringify(stripLinks(signals)), signals.text_sample, renderMode
     )
     .run();
 

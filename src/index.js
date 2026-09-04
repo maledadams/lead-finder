@@ -6,6 +6,7 @@ import { ingestSeeds } from './discover.js';
 import { renderDashboard } from './dashboard.js';
 import { harvestWikipedia, mineCorpus, storeCandidates, validateBatch } from './keywords.js';
 import { queryCertTransparency } from './sources.js';
+import { deriveLessons, recordFeedback, rerankOne } from './learning.js';
 
 /**
  * Headers applied to every response.
@@ -155,10 +156,8 @@ export default {
     if (!(await withinLimit(env.API_LIMITER, who))) return tooMany();
 
     if (!env.DASHBOARD_KEY) {
-      return json({
-        error: 'DASHBOARD_KEY is not set',
-        fix: 'wrangler secret put DASHBOARD_KEY',
-      }, 503);
+      // No configuration hints to an unauthenticated caller.
+      return json({ error: 'unavailable' }, 503);
     }
 
     // When REQUIRE_ACCESS is on, a request must arrive through Cloudflare
@@ -232,6 +231,66 @@ export default {
         const seeds = Array.isArray(body.seeds) ? body.seeds.slice(0, 500) : [];
         if (!seeds.length) return json({ error: 'seeds[] required' }, 400);
         return json(await ingestSeeds(db, seeds, body.source || 'manual-seed'));
+      }
+
+      // The reviewer's decision. One endpoint, because sent/skipped/blocked
+      // are the same event with different consequences, and every one of them
+      // is a training signal.
+      const decide = url.pathname.match(/^\/api\/decide\/([\w-]+)$/);
+      if (decide && request.method === 'POST') {
+        const outreachId = decide[1];
+        const body = await request.json().catch(() => ({}));
+        const decision = String(body.decision || '').toUpperCase();
+        const reason = String(body.reason || '').trim();
+
+        if (!['SENT', 'SKIPPED', 'BLOCKED'].includes(decision)) {
+          return json({ error: 'decision must be SENT, SKIPPED or BLOCKED' }, 400);
+        }
+        if (decision !== 'SENT' && reason.length < 4) {
+          return json({ error: 'a reason is required when not sending' }, 400);
+        }
+
+        const row = await db
+          .prepare('SELECT o.entity_id, e.contact_email, e.domain FROM outreach o JOIN entities e ON e.id = o.entity_id WHERE o.id = ?')
+          .bind(outreachId).first();
+        if (!row) return json({ error: 'not-found' }, 404);
+
+        if (decision === 'SENT') {
+          await markSent(db, outreachId);
+        } else {
+          await markSkipped(db, outreachId, reason.slice(0, 120));
+          if (decision === 'BLOCKED') {
+            await suppress(db, row.contact_email || `domain:${row.domain}`, reason.slice(0, 200));
+          }
+        }
+
+        await recordFeedback(db, {
+          entityId: row.entity_id, outreachId, decision, reason,
+          reviewer: request.headers.get('cf-access-authenticated-user-email') || 'dashboard',
+        });
+
+        // Rerank just this lead, now, because the reviewer told us something
+        // specific about it. Learning across leads happens separately.
+        let reranked = null;
+        if (decision === 'SKIPPED' && reason) {
+          const r = await rerankOne(env, db, row.entity_id, reason);
+          if (r.ok) reranked = { from: r.from, to: r.to };
+        }
+
+        return json({ ok: true, decision, reranked });
+      }
+
+      // Fold accumulated feedback into general lessons. Cheap: one AI call
+      // for a whole batch, and it applies to future evaluations only.
+      if (url.pathname === '/api/run/learn' && request.method === 'POST') {
+        return json(await deriveLessons(env, db));
+      }
+
+      if (url.pathname === '/api/lessons' && request.method === 'GET') {
+        const { results } = await db.prepare(
+          'SELECT lesson, kind, niche, weight, source_count, created_at FROM lessons WHERE active = 1 ORDER BY weight DESC'
+        ).all();
+        return json(results);
       }
 
       const act = url.pathname.match(/^\/api\/outreach\/([\w-]+)\/(sent|skip|suppress)$/);

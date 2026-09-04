@@ -63,12 +63,16 @@ DAILY_AI_BUDGET = "40"
 DAILY_QUEUE_MAX = "30"
 CRAWL_FRONTIER_BATCH = "60"
 NO_SITE_BATCH = "15"
+# Browser Rendering is metered. Only JS-rendered pages escalate to it.
+DAILY_BROWSER_RENDERS = "20"
+CF_ACCOUNT_ID = "YOUR_CLOUDFLARE_ACCOUNT_ID"
 DAILY_SOURCE_QUERIES = "12"
 KEYWORDS_VALIDATED_PER_RUN = "3"
 SOURCE_KEYWORDS_PER_RUN = "3"
 SOURCE_METROS_PER_RUN = "2"
 FRONTIER_LOW_WATER = "150"
-MIN_SCORE_TO_QUEUE = "68"
+MIN_SCORE_TO_QUEUE = "68"      # the recommended line, not a hard gate
+ABSOLUTE_FLOOR = "35"          # below this a lead is genuinely not worth a look
 MIN_PRESCORE_FOR_AI = "45"
 RE_EVAL_AFTER_DAYS = "45"
 # Set to "true" once the Worker is behind Cloudflare Access on a custom
