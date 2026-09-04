@@ -234,3 +234,49 @@ test('internal field labels never reach sent copy', async () => {
   assert.ok(!/system opportunity:/i.test(draft.body), 'field label leaked into the email');
   assert.match(draft.body, /booking flow for workshops/);
 });
+
+test('technical findings are translated for the recipient', async () => {
+  const { plainEnglish } = await import('../src/outreach.js');
+  // "no mobile viewport meta" in a cold email to a ceramicist reads as a bot.
+  assert.match(plainEnglish('no mobile viewport meta — the site is not built responsively'), /phones/);
+  assert.match(plainEnglish('copyright still reads 2019'), /footer still says 2019/);
+  assert.match(plainEnglish('orders taken manually by DM or email — no checkout flow'), /DMs rather than a proper checkout/);
+  assert.ok(!/viewport|srcset|meta description/i.test(
+    plainEnglish('no mobile viewport meta — the site is not built responsively')));
+  // Anything unrecognised passes through rather than being dropped.
+  assert.equal(plainEnglish('something unmapped'), 'something unmapped');
+  assert.equal(plainEnglish(null), null);
+});
+
+test('a lead with a real problem but no compliment still gets an email', async () => {
+  const { composeDraft } = await import('../src/outreach.js');
+  const env = { SENDER_NAME: 'Lucía Adams', SENDER_EMAIL: 'hi@x.com', SENDER_POSTAL_ADDRESS: '1 St' };
+
+  // Requiring a compliment was dropping a third of the queue.
+  const d = composeDraft({
+    niche: 'craft_goods', display_name: 'Ash Studio', contact_email: 'a@b.com',
+    website_opportunity: 'no mobile viewport meta — the site is not built responsively',
+    personalization: JSON.stringify({ liked: 'aesthetic personality and unique products' }),
+  }, env);
+  assert.ok(d, 'should still produce a draft');
+  assert.match(d.persona, /observation/);
+  assert.ok(!/aesthetic personality/.test(d.body), 'must not use the rejected compliment');
+
+  // But nothing to say at all still means no email.
+  assert.equal(composeDraft({
+    niche: 'craft_goods', display_name: 'X', contact_email: 'a@b.com',
+    personalization: JSON.stringify({}),
+  }, env), null);
+});
+
+test('obfuscated and Cloudflare-encoded emails are recovered', async () => {
+  const { decodeCloudflareEmails, decodeObfuscated, isUsableEmail } = await import('../src/extract.js');
+  const email = 'hello@mothandmoon.com'; const key = 0x3f;
+  let hex = key.toString(16).padStart(2, '0');
+  for (const ch of email) hex += (ch.charCodeAt(0) ^ key).toString(16).padStart(2, '0');
+  assert.deepEqual(decodeCloudflareEmails(`<span data-cfemail="${hex}">x</span>`), [email]);
+
+  assert.deepEqual(decodeObfuscated('reach us at hello (at) mothandmoon (dot) com'), [email]);
+  assert.ok(!isUsableEmail('noreply@brand.com'));
+  assert.ok(isUsableEmail('sasha@brand.com'));
+});

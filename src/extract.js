@@ -151,12 +151,15 @@ export function extractSignals(html, pageUrl) {
   const hasCart = /\/cart|shopping-cart|cart-count|cart-drawer/i.test(clean);
 
   // --- emails -----------------------------------------------------------
+  // Three sources, because plain mailto: links miss most of them.
   const emails = [
-    ...new Set(
-      [...clean.matchAll(/mailto:([^"'?\s>]+)/gi)].map((x) => x[1].toLowerCase())
-        .concat([...text.matchAll(/\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b/g)].map((x) => x[0].toLowerCase()))
-    ),
-  ].filter((e) => !/\.(png|jpe?g|gif|svg|webp)$/i.test(e) && !/(sentry|wixpress|example)\./i.test(e));
+    ...new Set([
+      ...[...clean.matchAll(/mailto:([^"'?\s>]+)/gi)].map((x) => decodeURIComponent(x[1]).toLowerCase()),
+      ...[...text.matchAll(/\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b/g)].map((x) => x[0].toLowerCase()),
+      ...decodeCloudflareEmails(html),
+      ...decodeObfuscated(text),
+    ]),
+  ].filter(isUsableEmail);
 
   // --- copyright year (staleness) ---------------------------------------
   const years = [...text.matchAll(/(?:©|&copy;|copyright)\s*(?:\d{4}\s*[-–]\s*)?(\d{4})/gi)]
@@ -212,7 +215,51 @@ export function extractSignals(html, pageUrl) {
 
     text_sample: text.slice(0, 3000),
     links,
+    contact_links: contactLinks(links, pageUrl),
   };
+}
+
+/**
+ * Pages likely to carry an email address.
+ *
+ * Most independent sites keep contact details off the homepage, which is why
+ * two thirds of leads were arriving with no way to reach them. One extra
+ * fetch of the right page recovers most of those.
+ *
+ * Ordered by how likely each is to pay off, so the pipeline can try just one.
+ */
+export function contactLinks(links, pageUrl) {
+  let host;
+  try { host = new URL(pageUrl).hostname.replace(/^www\./, ''); } catch { return []; }
+
+  const scored = [];
+  for (const l of links || []) {
+    let u;
+    try { u = new URL(l.url); } catch { continue; }
+    if (u.hostname.replace(/^www\./, '') !== host) continue;
+
+    const path = u.pathname.toLowerCase();
+    const label = (l.label || '').toLowerCase();
+    let score = 0;
+
+    if (/\/contact/.test(path)) score += 50;
+    else if (/\/about/.test(path)) score += 30;
+    else if (/\/pages\/(?:contact|about|our-story|stockists|wholesale)/.test(path)) score += 40;
+    else if (/\/(?:info|support|help|faq|imprint|impressum|legal|team)/.test(path)) score += 20;
+    else if (/\/(?:stockists|wholesale|trade|press)/.test(path)) score += 18;
+
+    if (/\bcontact\b|get in touch|say hello|reach us|email us/.test(label)) score += 25;
+    else if (/\babout\b|our story|the studio/.test(label)) score += 12;
+
+    if (score > 0) scored.push({ url: u.toString(), score, path });
+  }
+
+  const seen = new Set();
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .filter((x) => (seen.has(x.path) ? false : seen.add(x.path)))
+    .slice(0, 3)
+    .map((x) => x.url);
 }
 
 /**
@@ -230,4 +277,63 @@ export function guessNiche(signals, niches, fallback) {
     if (hits && (!best || hits > best.hits)) best = { slug, hits };
   }
   return best && best.hits >= 2 ? best.slug : fallback;
+}
+
+
+/**
+ * Decode Cloudflare's email obfuscation.
+ *
+ * Any Cloudflare-proxied site with Email Address Obfuscation on replaces
+ * addresses with a hex blob, so a plain mailto: scan finds nothing. Since a
+ * large share of independent brand sites sit behind Cloudflare, this recovers
+ * contact details that would otherwise be invisible.
+ *
+ * Format: first byte is an XOR key, the rest is the address.
+ */
+export function decodeCloudflareEmails(html) {
+  const out = [];
+  const rx = /(?:data-cfemail=["']|\/cdn-cgi\/l\/email-protection#)([0-9a-f]{8,})/gi;
+  let m;
+  while ((m = rx.exec(String(html || ''))) !== null) {
+    const hex = m[1];
+    try {
+      const key = parseInt(hex.slice(0, 2), 16);
+      let email = '';
+      for (let i = 2; i < hex.length; i += 2) {
+        email += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16) ^ key);
+      }
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) out.push(email.toLowerCase());
+    } catch { /* skip malformed blob */ }
+    if (out.length > 10) break;
+  }
+  return out;
+}
+
+/**
+ * Decode addresses written to defeat scrapers: "hello (at) brand (dot) com".
+ *
+ * Small studios do this constantly, and it is a deliberate, published way of
+ * saying "here is how to reach me" — so reading it is reading their contact
+ * details, not circumventing anything.
+ */
+export function decodeObfuscated(text) {
+  const out = [];
+  const rx = /\b([\w.+-]{2,40})\s*(?:\(|\[|\{)?\s*(?:at|@)\s*(?:\)|\]|\})?\s*([\w-]{2,40})\s*(?:\(|\[|\{)?\s*(?:dot|\.)\s*(?:\)|\]|\})?\s*([a-z]{2,12})\b/gi;
+  let m;
+  while ((m = rx.exec(String(text || ''))) !== null) {
+    const candidate = `${m[1]}@${m[2]}.${m[3]}`.toLowerCase();
+    if (/^[^\s@]+@[^\s@]+\.[a-z]{2,12}$/.test(candidate)) out.push(candidate);
+    if (out.length > 6) break;
+  }
+  return out;
+}
+
+// Addresses that are never a real human contact.
+const JUNK_EMAIL =
+  /\.(png|jpe?g|gif|svg|webp|css|js)$|(?:sentry|wixpress|example|yourdomain|domain|email|placeholder|test)\.|^(?:no-?reply|donotreply|postmaster|abuse|webmaster|hostmaster)@|@(?:sentry|example|test|localhost)/i;
+
+export function isUsableEmail(e) {
+  if (!e || e.length > 100) return false;
+  if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(e)) return false;
+  return !JUNK_EMAIL.test(e);
 }

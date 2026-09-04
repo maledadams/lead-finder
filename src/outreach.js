@@ -91,17 +91,22 @@ export function composeDraft(entity, env) {
   // its own. Requiring one here would silently drop the strongest leads.
   if (p.no_website) return composeNoWebsiteDraft(entity, env, persona);
 
-  // The evidence rule, enforced at the last possible moment.
-  if (!p.liked || p.evidence_rejected) return null;
-
-  // Reject compliments that are attribute lists rather than observations.
-  // Production produced "aesthetic personality and unique products stands
-  // out" - grammatically broken and true of any brand. If it does not name
-  // something concrete, no draft goes out.
-  if (!isSpecificCompliment(p.liked)) return null;
-
   const opportunity = p.opportunity || firstClause(entity.website_opportunity) || firstClause(entity.system_opportunity);
   if (!opportunity) return null;
+
+  // The evidence rule. A compliment must be real: backed by page text, and
+  // specific rather than an attribute list.
+  const hasRealCompliment =
+    Boolean(p.liked) && !p.evidence_rejected && isSpecificCompliment(p.liked);
+
+  // No honest compliment does NOT mean no email.
+  //
+  // Requiring one was dropping 46 of 120 leads in a single queue build — more
+  // than a third — including businesses with a perfectly concrete, measured
+  // problem worth writing about. The rule that matters is "never invent
+  // praise", not "never write without praise". So when there is nothing real
+  // to admire, the email simply opens on the observation instead.
+  if (!hasRealCompliment) return composeObservationDraft(entity, env, persona, opportunity);
 
   const name = entity.display_name || entity.domain || 'your';
   const greeting = entity.founder_name ? `hi ${firstName(entity.founder_name)},` : 'hi!';
@@ -116,7 +121,7 @@ export function composeDraft(entity, env) {
     '',
     `${persona.open(lowerFirst(p.liked))}.`,
     '',
-    `${persona.bridge} — specifically, ${lowerFirst(opportunity)}`,
+    `${persona.bridge} — specifically, ${lowerFirst(plainEnglish(opportunity))}`,
     '',
     ctaFor(persona, entity, det),
     '',
@@ -130,6 +135,44 @@ export function composeDraft(entity, env) {
     body,
     cta: ctaFor(persona, entity, det),
     persona: entity.niche || 'lifestyle_brand',
+  };
+}
+
+/**
+ * Draft that leads with the observation rather than a compliment.
+ *
+ * Used when nothing evidence-backed was found to admire. It says less, and
+ * what it says is true, which is the whole point. Still shorter than the
+ * complimented version because there is less to legitimately say.
+ */
+function composeObservationDraft(entity, env, persona, opportunity) {
+  if (!entity.contact_email) return null;
+
+  const name = entity.display_name || entity.domain || 'your site';
+  const greeting = entity.founder_name ? `hi ${firstName(entity.founder_name)},` : 'hi!';
+
+  const body = [
+    greeting,
+    '',
+    `i was looking at ${name} and noticed something i thought was worth mentioning — ${lowerFirst(plainEnglish(opportunity))}.`,
+    '',
+    'i build websites and small custom systems for independent creative businesses, so this is the sort of thing i notice whether or not anyone asked me to.',
+    '',
+    ctaFor(persona, entity, {
+      website_need: entity.website_opportunity ? 1 : 0,
+      system_need: entity.system_opportunity ? 2 : 0,
+    }),
+    '',
+    signOff(env, persona),
+    '',
+    canSpamFooter(env),
+  ].filter((l) => l !== undefined && l !== null).join('\n');
+
+  return {
+    subject: `${name} — one thing i noticed`,
+    body,
+    cta: 'observation-led',
+    persona: `${entity.niche || 'lifestyle_brand'}:observation`,
   };
 }
 
@@ -219,6 +262,40 @@ export function isSpecificCompliment(text) {
   // "personality and products" - abstractions joined by "and", naming nothing.
   if (/^[\w\s]+ and [\w\s]+$/.test(t) && !/[A-Z0-9"']/.test(t.slice(1))) return false;
   return true;
+}
+
+/**
+ * Say the finding the way a shop owner would understand it.
+ *
+ * The audit records things like "no mobile viewport meta" because that is
+ * what was measured. Putting that phrase in a cold email to a ceramicist is
+ * worse than saying nothing: it reads as jargon, or as a bot. These are the
+ * same facts in the language the recipient actually uses.
+ */
+const PLAIN_ENGLISH = [
+  [/no mobile viewport meta.*/i, 'the site was never set up to work properly on phones'],
+  [/entire web presence is a single-page link site/i, 'everything lives on one link page, which is doing your work a disservice'],
+  [/(\d+) images with no lazy-loading or srcset.*/i, 'the images load at full size on mobile, which makes the site feel slow'],
+  [/images have no width\/height.*/i, 'the page jumps around while the images load'],
+  [/copyright still reads (\d{4})/i, 'the footer still says $1'],
+  [/almost no copy.*/i, 'there is almost nothing on the site about who you are'],
+  [/no meta description/i, 'the site has no description, so search results show whatever they can find'],
+  [/(\w+) template with limited design control/i, 'the site is on a $1 template that limits how much it can look like you'],
+  [/orders taken manually by DM or email.*/i, 'orders come through DMs rather than a proper checkout'],
+  [/sells sessions or commissions with no booking flow.*/i, 'there is no way to book you from the site'],
+  [/wholesale\/stockist programme with no ordering portal/i, 'stockists have no way to order without emailing you'],
+  [/selling online with no email capture/i, 'nothing on the site captures emails from people who are not ready to buy'],
+  [/runs events\/pop-ups.*/i, 'events and pop-ups are handled by hand'],
+  [/large catalogue with no reviews\/retention tooling/i, 'a big catalogue with nothing bringing customers back'],
+];
+
+export function plainEnglish(finding) {
+  if (!finding) return null;
+  const t = String(finding).trim();
+  for (const [rx, replacement] of PLAIN_ENGLISH) {
+    if (rx.test(t)) return t.replace(rx, replacement);
+  }
+  return t;
 }
 
 const firstName = (n) => String(n).trim().split(/\s+/)[0];

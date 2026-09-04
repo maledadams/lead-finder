@@ -10,9 +10,15 @@
 // ---------------------------------------------------------------------------
 export const AI_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
-// Rough, deliberately pessimistic. Used only to show a running estimate in the
-// dashboard so you notice drift early. It is not a billing figure.
-export const NEURONS_PER_EVAL = 2200;
+// MEASURED, not guessed. Cloudflare's GraphQL analytics reported 3,969
+// neurons across 56 real evaluations of this exact prompt against this exact
+// model — about 71 each. The original estimate here was 2,200, which was 31x
+// too high and made the AI budget look far more expensive than it is.
+//
+// Workers Paid includes 10,000 neurons/day, so roughly 140 evaluations a day
+// fit inside the included allocation. Re-measure with the GraphQL
+// aiInferenceAdaptiveGroups query if the prompt or model changes.
+export const NEURONS_PER_EVAL = 75;
 
 // ---------------------------------------------------------------------------
 // Niche taxonomy.

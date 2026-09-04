@@ -32,10 +32,37 @@ import { newId, nowIso, normalizeUrl, resolveEntity } from './entity.js';
 export async function runCrawl(env, db) {
   const runId = newId();
   const startedAt = nowIso();
+
+  // Wall-clock deadline, not just a budget.
+  //
+  // Run history showed crawls finishing in 118-390s, and anything longer being
+  // killed by the runtime mid-flight: the run row was left open forever and
+  // its work went unrecorded. Budgets alone cannot prevent that, because a run
+  // can be slow without being large.
+  //
+  // So a pass stops cleanly when time runs short and records what it did. The
+  // frontier is persistent, so the next scheduled pass simply carries on —
+  // which is why there are several crawl triggers a day rather than one.
+  const runSeconds = num(env, 'MAX_RUN_SECONDS', 200);
+  const startMs = Date.now();
+  const deadline = startMs + runSeconds * 1000;
+  const outOfTime = () => Date.now() > deadline;
+
+  // Each phase gets its own slice, because they compete for the same clock and
+  // the ones that run first would otherwise starve the ones that matter most.
+  //
+  // Measured: with only a single overall deadline, a 60s pass spent everything
+  // on discovery and website-less scoring and fetched ZERO pages — the actual
+  // auditing never ran. Discovery is worthless if nothing is ever audited.
+  const discoveryDeadline = startMs + Math.round(runSeconds * 0.30) * 1000;
+  const noSiteDeadline = startMs + Math.round(runSeconds * 0.50) * 1000;
+  const discoveryOutOfTime = () => Date.now() > discoveryDeadline;
+  const noSiteOutOfTime = () => Date.now() > noSiteDeadline;
   const stats = {
     fetched: 0, skipped_unchanged: 0, evaluated_ai: 0, cached_ai: 0,
     rejected: 0, qualified: 0, new_entities: 0, merged: 0,
     frontier_added: 0, errors: 0, no_website_scored: 0,
+    contact_fetched: 0, contact_emails_found: 0,
   };
 
   await db
@@ -53,7 +80,7 @@ export async function runCrawl(env, db) {
 
     // Top the frontier up from automated sources before doing anything else,
     // so the crawl never runs dry and never needs a human to feed it.
-    stats.source = await topUpFrontier(env, db, budget);
+    stats.source = await topUpFrontier(env, db, budget, discoveryOutOfTime);
 
     const fetcher = new Fetcher(env.USER_AGENT);
     const minPrescore = num(env, 'MIN_PRESCORE_FOR_AI', 45);
@@ -94,7 +121,7 @@ export async function runCrawl(env, db) {
       .all();
 
     for (const e of noSite.results || []) {
-      if (!budget.canSpend('ai')) break;
+      if (!budget.canSpend('ai') || noSiteOutOfTime()) break;
       try {
         await processNoWebsite(env, db, { entity: e, budget, stats, minQueue });
       } catch (err) {
@@ -110,6 +137,7 @@ export async function runCrawl(env, db) {
 
     for (const target of targets) {
       if (!budget.canSpend('fetch')) break;
+      if (outOfTime()) { stats.stopped_on_time = true; break; }
       const url = normalizeUrl(target.url);
       if (!url) {
         if (target.kind === 'frontier') await markFrontier(db, target.url, 'SKIPPED');
@@ -127,6 +155,7 @@ export async function runCrawl(env, db) {
 
     await budget.flush();
     stats.budget = budget.summary();
+    stats.elapsed_s = Math.round((Date.now() - startMs) / 1000);
 
     await db
       .prepare('UPDATE runs SET finished_at = ?, stats = ? WHERE id = ?')
@@ -150,7 +179,7 @@ export async function runCrawl(env, db) {
  * the work and the CT sweep is a floor rather than the main channel. Keywords
  * rotate least-recently-used, so the whole list gets covered over time.
  */
-async function topUpFrontier(env, db, budget) {
+async function topUpFrontier(env, db, budget, outOfTime = () => false) {
   const out = {
     osm: { metros: [], businesses: 0, new_entities: 0, errors: 0 },
     ct: { keywords: [], domains_found: 0, frontier_added: 0, errors: 0 },
@@ -181,7 +210,10 @@ async function topUpFrontier(env, db, budget) {
   if (!due.length && frontierHealthy) return { ...out, skipped: 'all-metros-swept-recently' };
 
   for (const { metro, bbox } of due) {
-    if (!budget.canSpend('source')) break;
+    // Overpass and crt.sh are slow enough that discovery alone can consume a
+    // whole pass. Checking the clock here is what keeps the fetch loop from
+    // being starved of time by the sources that feed it.
+    if (!budget.canSpend('source') || outOfTime()) break;
 
     const { candidates, error } = await queryMetro(metro, bbox, env.USER_AGENT);
     budget.spend('source');
@@ -217,7 +249,7 @@ async function topUpFrontier(env, db, budget) {
   if ((stillPending?.n || 0) >= lowWater) return out;
 
   // Keep the vocabulary fed and measured before spending queries on it.
-  out.ct.vocab = await maintainVocabulary(env, db, budget);
+  out.ct.vocab = await maintainVocabulary(env, db, budget, outOfTime);
 
   const kwCount = Math.min(num(env, 'SOURCE_KEYWORDS_PER_RUN', 3), budget.remaining('source'));
   // Prefer harvested-and-validated terms; fall back to the bootstrap list
@@ -226,7 +258,7 @@ async function topUpFrontier(env, db, budget) {
   const picks = active.length ? active : await nextKeywords(db, kwCount);
 
   for (const { keyword } of picks) {
-    if (!budget.canSpend('source')) break;
+    if (!budget.canSpend('source') || outOfTime()) break;
 
     const { domains, error } = await queryCertTransparency(keyword, env.USER_AGENT);
     budget.spend('source');
@@ -261,7 +293,7 @@ async function topUpFrontier(env, db, budget) {
  * yield is known. Corpus mining kicks in once there are enough scored pages
  * to learn from.
  */
-async function maintainVocabulary(env, db, budget) {
+async function maintainVocabulary(env, db, budget, outOfTime = () => false) {
   const out = { harvested: 0, mined: 0, validated: null };
 
   const have = await db.prepare('SELECT COUNT(*) AS n FROM keywords').first();
@@ -282,10 +314,11 @@ async function maintainVocabulary(env, db, budget) {
 
   // Measure a few unvalidated terms per run, within the source budget.
   const toTest = Math.min(num(env, 'KEYWORDS_VALIDATED_PER_RUN', 3), budget.remaining('source'));
-  if (toTest > 0) {
+  if (toTest > 0 && !outOfTime()) {
     out.validated = await validateBatch(
       db, toTest,
       async (kw, ua) => {
+        if (outOfTime()) return { domains: [], error: 'out-of-time' };
         budget.spend('source');
         return queryCertTransparency(kw, ua);
       },
@@ -403,6 +436,26 @@ async function processOne(env, db, ctx) {
       .bind(nowIso(), nowIso(), entityId)
       .run();
     return;
+  }
+
+  // --- chase a contact page if we still have no email --------------------
+  //
+  // The single biggest bottleneck measured in production: of 120 leads
+  // considered for one queue, 66 were dropped purely because no email was
+  // found. Most independent sites keep contact details off the homepage, so
+  // one extra fetch of /contact or /about recovers a large share of them.
+  //
+  // Only for candidates that already look worth it, so the extra fetch is
+  // never spent on a business we were going to reject anyway.
+  if (!signals.emails?.length && signals.contact_links?.length && budget.canSpend('fetch')) {
+    const extra = await chaseContactPage(fetcher, signals.contact_links, res.finalUrl || url);
+    budget.spend('fetch');
+    stats.contact_fetched = (stats.contact_fetched || 0) + 1;
+    if (extra.emails.length) {
+      signals.emails = extra.emails;
+      signals.contact_source_url = extra.url;
+      stats.contact_emails_found = (stats.contact_emails_found || 0) + 1;
+    }
   }
 
   // --- hard filters -----------------------------------------------------
@@ -553,6 +606,23 @@ async function processNoWebsite(env, db, { entity, budget, stats, minQueue }) {
       nowIso(), nowIso(), entity.id
     )
     .run();
+}
+
+/**
+ * Fetch the most promising contact page and pull addresses out of it.
+ *
+ * Tries one page, not all of them: the second-best candidate is rarely worth
+ * another fetch, and the budget is better spent on a different business.
+ */
+async function chaseContactPage(fetcher, candidates, baseUrl) {
+  const target = candidates[0];
+  if (!target) return { emails: [], url: null };
+
+  const res = await fetcher.get(target);
+  if (!res.ok || !res.html) return { emails: [], url: null };
+
+  const sub = extractSignals(res.html, res.finalUrl || target);
+  return { emails: sub.emails || [], url: target };
 }
 
 /** Titles are usually "Brand — tagline". Keep the brand. */

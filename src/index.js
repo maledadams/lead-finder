@@ -72,6 +72,10 @@ function authorized(request, env) {
   return timingSafeEqual(provided, expected);
 }
 
+function safeJson(s) {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
 function timingSafeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
   let diff = 0;
@@ -135,6 +139,7 @@ export default {
    */
   async scheduled(event, env, ctx) {
     const db = env.DB;
+    // One queue build a day; every other trigger is a crawl pass.
     const isQueueRun = event.cron === '0 11 * * *';
     ctx.waitUntil(
       (isQueueRun ? buildQueue(env, db) : runCrawl(env, db)).catch((err) => {
@@ -143,7 +148,7 @@ export default {
     );
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const db = env.DB;
 
@@ -336,8 +341,37 @@ export default {
       }
 
       // ---- manual triggers ----------------------------------------------
+      //
+      // A full crawl now takes several minutes at production batch sizes, far
+      // longer than an HTTP request should be held open. So it is started in
+      // the background and the caller is told where to look, exactly as the
+      // cron path does. `?wait=1` keeps the old blocking behaviour for small
+      // manual runs.
       if (url.pathname === '/api/run/crawl' && request.method === 'POST') {
-        return json(await runCrawl(env, db));
+        if (url.searchParams.get('wait') === '1') return json(await runCrawl(env, db));
+
+        ctx.waitUntil(
+          runCrawl(env, db).catch((err) => console.error('crawl failed', err?.stack || err))
+        );
+        return json({
+          started: true,
+          note: 'Crawl running in the background. Check /api/runs in a few minutes.',
+        });
+      }
+
+      // Recent run history, so a backgrounded crawl can be checked on.
+      if (url.pathname === '/api/runs' && request.method === 'GET') {
+        const { results } = await db.prepare(
+          `SELECT kind, started_at, finished_at, stats, error
+           FROM runs ORDER BY started_at DESC LIMIT 8`
+        ).all();
+        return json((results || []).map((r) => ({
+          kind: r.kind,
+          started_at: r.started_at,
+          finished: Boolean(r.finished_at),
+          error: r.error,
+          stats: safeJson(r.stats),
+        })));
       }
       if (url.pathname === '/api/keywords' && request.method === 'GET') {
         const { results } = await db.prepare(

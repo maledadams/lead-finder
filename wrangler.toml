@@ -8,14 +8,16 @@ compatibility_flags = ["nodejs_compat"]
 #
 # Two triggers, deliberately few — every invocation costs requests and CPU.
 #
-#   06:00 UTC  crawl   discovery + audit + AI evaluation, budget-capped
+#   05:00 UTC  crawl   three passes rather than one: a single invocation
+#   06:00 UTC  crawl   cannot work through a day's budget before it runs out
+#   07:00 UTC  crawl   of time, and shorter runs also fail more cheaply.
 #   11:00 UTC  queue   build the day's ranked outreach queue (<=30)
 #
 # The gap lets the crawl finish and settle before the queue reads scores.
 # Adjust to taste; more frequent runs cost more and buy nothing at this volume.
 # ---------------------------------------------------------------------------
 [triggers]
-crons = ["0 6 * * *", "0 11 * * *"]
+crons = ["0 5 * * *", "0 6 * * *", "0 7 * * *", "0 11 * * *"]
 
 # ---------------------------------------------------------------------------
 # Custom domain for the dashboard.
@@ -58,18 +60,20 @@ simple = { limit = 8, period = 60 }
 [vars]
 # Everything here is a safety limit. They are intentionally low.
 # Raise them only after you have watched real usage in the dashboard.
-DAILY_FETCH_BUDGET = "300"
-DAILY_AI_BUDGET = "40"
+DAILY_FETCH_BUDGET = "900"
+DAILY_AI_BUDGET = "75"
 DAILY_QUEUE_MAX = "30"
-CRAWL_FRONTIER_BATCH = "60"
-NO_SITE_BATCH = "15"
+CRAWL_FRONTIER_BATCH = "90"
+# A pass stops cleanly at this many seconds; the next cron pass continues.
+MAX_RUN_SECONDS = "120"
+NO_SITE_BATCH = "40"
 # Browser Rendering is metered. Only JS-rendered pages escalate to it.
-DAILY_BROWSER_RENDERS = "20"
+DAILY_BROWSER_RENDERS = "30"
 CF_ACCOUNT_ID = "YOUR_CLOUDFLARE_ACCOUNT_ID"
-DAILY_SOURCE_QUERIES = "12"
-KEYWORDS_VALIDATED_PER_RUN = "3"
-SOURCE_KEYWORDS_PER_RUN = "3"
-SOURCE_METROS_PER_RUN = "2"
+DAILY_SOURCE_QUERIES = "24"
+KEYWORDS_VALIDATED_PER_RUN = "8"
+SOURCE_KEYWORDS_PER_RUN = "5"
+SOURCE_METROS_PER_RUN = "4"
 FRONTIER_LOW_WATER = "150"
 MIN_SCORE_TO_QUEUE = "68"      # the recommended line, not a hard gate
 ABSOLUTE_FLOOR = "35"          # below this a lead is genuinely not worth a look
