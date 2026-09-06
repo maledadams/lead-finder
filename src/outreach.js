@@ -9,62 +9,70 @@
 // If there is no evidence-backed thing to admire, NO DRAFT IS PRODUCED. An
 // invented compliment is worse than silence.
 
+/**
+ * Per-niche framing.
+ *
+ * `context` is how Lucia describes what she does to THIS kind of business —
+ * the credibility line. `offer` is the concrete thing she will send, which is
+ * what earns a reply: a request for "a quick chat" asks the recipient to
+ * spend time, an offer to send something specific gives them a reason to.
+ */
 const PERSONAS = {
   alt_fashion: {
     label: 'Alternative fashion',
-    subject: (n) => `${n} — one thought about your site`,
-    open: (liked) => `i went down a bit of a rabbit hole on your site. ${liked} is genuinely great`,
-    bridge: 'the clothes have so much attitude. one thing stood out though:',
-    cta: 'want me to mock up what the shop page could look like? no strings — i just want to make it',
-    sign: 'lucía',
+    subject: (n) => `${n} — a few notes on your site`,
+    open: (liked) => `I came across ${'{BRAND}'} recently and spent a while on your site. ${liked} is genuinely great`,
+    context: 'I design and build websites for independent fashion labels — the kind where the site needs to carry as much personality as the clothes do.',
+    offer: 'a short written breakdown of what I would change on the shop pages, with a rough visual of how it could look',
+    sign: 'Lucía Adams',
   },
   craft_goods: {
     label: 'Handmade & craft',
-    subject: (n) => `${n} — a small thing about your shop page`,
-    open: (liked) => `i came across your work this week. ${liked} is lovely`,
-    bridge: 'the making is clearly the good part. one thing i noticed:',
-    cta: 'i could sketch out how the shop might feel closer to the actual objects. want me to?',
-    sign: 'lucía',
+    subject: (n) => `${n} — a few notes on your shop pages`,
+    open: (liked) => `I came across your work this week and spent some time with it. ${liked} is lovely`,
+    context: 'I design and build websites for independent makers and studios, so the site does justice to work that is made by hand.',
+    offer: 'a short written breakdown of what I would change, with a rough visual of how the shop could feel closer to the objects themselves',
+    sign: 'Lucía Adams',
   },
   beauty_wellness: {
     label: 'Beauty & skincare',
-    subject: (n) => `a thought on the ${n} product pages`,
-    open: (liked) => `i was looking through your range and ${liked} stayed with me`,
-    bridge: 'the product story is strong. one thing gets in its way though:',
-    cta: 'happy to walk you through what i would change on the product pages — worth a look?',
-    sign: 'lucía',
+    subject: (n) => `${n} — notes on your product pages`,
+    open: (liked) => `I was looking through your range this week and ${liked} stayed with me`,
+    context: 'I design and build websites for independent beauty and skincare brands, where most of the decision happens on the product page.',
+    offer: 'a short written breakdown of what I would change on the product pages, and why',
+    sign: 'Lucía Adams',
   },
   food_bev: {
     label: 'Food & beverage',
-    subject: (n) => `${n} — one idea for the site`,
-    open: (liked) => `found you recently and ${liked} sold me immediately`,
-    bridge: 'the brand has real appetite to it. one thing stood out:',
-    cta: 'want a quick teardown of the ordering flow? ten minutes of my time, yours either way',
-    sign: 'lucía',
+    subject: (n) => `${n} — a thought on your ordering flow`,
+    open: (liked) => `I came across ${'{BRAND}'} recently and ${liked} sold me immediately`,
+    context: 'I design and build websites and ordering systems for small food and drink brands.',
+    offer: 'a short teardown of the ordering flow with the specific changes I would make',
+    sign: 'Lucía Adams',
   },
   artist_portfolio: {
     label: 'Artist portfolio',
-    subject: () => `your work deserves a better home`,
-    open: (liked) => `i spent a while with your work today. ${liked} really got me`,
-    bridge: 'though one thing caught my eye:',
-    cta: 'i would love to show you a rough layout for a real portfolio. want me to put one together?',
-    sign: 'lucía',
+    subject: () => `Your work and where it lives`,
+    open: (liked) => `I spent a while with your work today. ${liked} really stayed with me`,
+    context: 'I design and build portfolio sites for artists and illustrators — properly built, not a template with your images dropped in.',
+    offer: 'a rough layout for what a real portfolio site could look like for your work',
+    sign: 'Lucía Adams',
   },
   creative_studio: {
     label: 'Creative studio',
-    subject: (n) => `${n} — a thought on your own site`,
-    open: (liked) => `been looking through your work and ${liked} stands out`,
-    bridge: 'you clearly do this well for clients. your own setup is the usual casualty:',
-    cta: 'open to a short conversation about it? i work with studios on exactly this',
-    sign: 'Lucía',
+    subject: (n) => `${n} — a note on your own site`,
+    open: (liked) => `I have been looking through your work and ${liked} stands out`,
+    context: 'I build websites and internal tools for creative studios — usually the work that gets postponed because client projects come first.',
+    offer: 'a short written assessment of your site and the workflow around it, with what I would prioritise',
+    sign: 'Lucía Adams',
   },
   lifestyle_brand: {
     label: 'Creative lifestyle brand',
-    subject: (n) => `a note on the ${n} site`,
-    open: (liked) => `came across your brand and ${liked} is really nice`,
-    bridge: 'the identity is all there. one thing is lagging behind it:',
-    cta: 'want me to put together a quick visual of what it could be? genuinely no pressure',
-    sign: 'lucía',
+    subject: (n) => `${n} — a few notes on your site`,
+    open: (liked) => `I came across ${'{BRAND}'} recently and ${liked} is really nice`,
+    context: 'I design and build websites for independent brands with a clear identity of their own.',
+    offer: 'a short written breakdown of what I would change, with a rough visual of where it could go',
+    sign: 'Lucía Adams',
   },
 };
 
@@ -115,30 +123,40 @@ export function composeDraft(entity, env) {
   if (!hasRealCompliment) return composeObservationDraft(entity, env, persona, opportunity);
 
   const name = displayName(entity);
-  const greeting = entity.founder_name ? `hi ${firstName(entity.founder_name)},` : 'hi!';
+  const greeting = entity.founder_name ? `Hi ${firstName(entity.founder_name)},` : 'Hello,';
 
   const det = {
     website_need: entity.website_opportunity ? 1 : 0,
     system_need: entity.system_opportunity ? 2 : 0,
   };
 
+  const finding = plainEnglish(opportunity);
+  const why = consequenceOf(finding);
+
   const body = [
     greeting,
     '',
-    `${persona.open(lowerFirst(p.liked))}.`,
+    `${fixCaps(persona.open(lowerFirst(p.liked)).replace('{BRAND}', name))}.`,
     '',
-    `${persona.bridge} ${lowerFirst(plainEnglish(opportunity))}.`,
+    `I'm Lucía Adams. ${persona.context}`,
     '',
-    ctaFor(persona, entity, det),
+    why
+      ? `Looking at your site, one thing stood out: ${lowerFirst(finding)}. ${sentence(why)}`
+      : `Looking at your site, one thing stood out: ${lowerFirst(finding)}.`,
     '',
-    signOff(env, persona),
+    `If it would be useful, I can put together ${persona.offer} — free, and with no expectation that you work with me afterwards.`,
+    '',
+    'Would you like me to send it over this week?',
+    '',
+    'Best,',
+    signature(env, persona),
     canSpamFooter(env),
   ].filter((l) => l !== undefined).join('\n');
 
   return {
     subject: persona.subject(name),
     body,
-    cta: ctaFor(persona, entity, det),
+    cta: persona.offer,
     persona: entity.niche || 'lifestyle_brand',
   };
 }
@@ -154,26 +172,33 @@ function composeObservationDraft(entity, env, persona, opportunity) {
   if (!entity.contact_email) return null;
 
   const name = displayName(entity);
-  const greeting = entity.founder_name ? `hi ${firstName(entity.founder_name)},` : 'hi!';
+  const greeting = entity.founder_name ? `Hi ${firstName(entity.founder_name)},` : 'Hello,';
+
+  const finding = plainEnglish(opportunity);
+  const why = consequenceOf(finding);
 
   const body = [
     greeting,
     '',
-    `i was looking at ${name} and noticed ${lowerFirst(plainEnglish(opportunity))}.`,
+    `I came across ${name} this week and spent some time on your site.`,
     '',
-    'i design and build sites for small creative businesses, so it is the sort of thing i notice whether or not anyone asked.',
+    `I'm Lucía Adams. ${persona.context}`,
     '',
-    ctaFor(persona, entity, {
-      website_need: entity.website_opportunity ? 1 : 0,
-      system_need: entity.system_opportunity ? 2 : 0,
-    }),
+    why
+      ? `One thing stood out: ${lowerFirst(finding)}. ${sentence(why)}`
+      : `One thing stood out: ${lowerFirst(finding)}.`,
     '',
-    signOff(env, persona),
+    `If it would be useful, I can put together ${persona.offer} — free, and with no expectation that you work with me afterwards.`,
+    '',
+    'Would you like me to send it over this week?',
+    '',
+    'Best,',
+    signature(env, persona),
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
   return {
-    subject: `${name} — one thing i noticed`,
+    subject: `${name} — a few notes on your site`,
     body,
     cta: 'observation-led',
     persona: `${entity.niche || 'lifestyle_brand'}:observation`,
@@ -193,32 +218,37 @@ function composeNoWebsiteDraft(entity, env, persona) {
   if (!entity.contact_email) return null;
 
   const name = entity.display_name;
-  const greeting = entity.founder_name ? `hi ${firstName(entity.founder_name)},` : 'hi!';
+  const greeting = entity.founder_name ? `Hi ${firstName(entity.founder_name)},` : 'Hello,';
   const hasIg = Boolean(entity.instagram);
 
   const observation = hasIg
-    ? `i came across ${name} on instagram and went looking for your website — as far as i can tell there isn't one yet`
-    : `i came across ${name} and went looking for a website — as far as i can tell there isn't one yet`;
+    ? `I came across ${name} on Instagram and went looking for your website — as far as I can tell there isn't one yet.`
+    : `I came across ${name} recently and went looking for your website — as far as I can tell there isn't one yet.`;
 
   const point = hasIg
-    ? "which feels like a gap, because you've already done the hard part. people find you, like what they see, and then there's nowhere for them to go."
-    : "which might be deliberate, and if so ignore me entirely.";
+    ? 'If that is deliberate, ignore me entirely. If it is not, it is worth saying that you have already done the hard part: people find you and like what they see, and then there is nowhere for them to go.'
+    : 'If that is deliberate, ignore me entirely.';
 
   const body = [
     greeting,
     '',
-    `${observation} — ${point}`,
+    observation,
     '',
-    'i make small, well-built sites for creative businesses. things that look like the person behind them rather than a template.',
+    point,
     '',
-    'if you ever want one, i would happily put a rough idea together first so you can see it before deciding anything. free, no catch.',
+    `I'm Lucía Adams. ${persona.context}`,
     '',
-    signOff(env, persona),
+    'If it would be useful, I can put together a rough idea of what a site could look like for you — free, and with no expectation that you work with me afterwards.',
+    '',
+    'Would you like me to send it over this week?',
+    '',
+    'Best,',
+    signature(env, persona),
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
   return {
-    subject: `${name} — you don't have a website yet?`,
+    subject: `${name} — a question about your website`,
     body,
     cta: 'offer a free rough visual before any commitment',
     persona: `${entity.niche || 'lifestyle_brand'}:no_website`,
@@ -232,9 +262,27 @@ function composeNoWebsiteDraft(entity, env, persona) {
  * is configured. Once SENDER_NAME is set it wins outright, otherwise drafts
  * end with "— lucia" immediately followed by "Lucía Adams".
  */
-function signOff(env, persona) {
-  return `— ${persona.sign || env?.SENDER_NAME || 'lucía'}`;
+/** A real signature block: name, site, address. */
+function signature(env, persona) {
+  const name = env?.SENDER_NAME || persona.sign || 'Lucía Adams';
+  const email = env?.SENDER_EMAIL;
+  const site = email ? email.split('@')[1] : null;
+  return [name, site, email].filter(Boolean).join('\n');
 }
+
+const sentence = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) + '.' : '');
+
+/**
+ * Capitalise the first letter of each sentence.
+ *
+ * The compliment is lowercased so it can sit mid-sentence, but several
+ * templates place it directly after a full stop, which produced lines like
+ * "spent some time with it. the ash-glazed vase collection is lovely".
+ */
+const fixCaps = (t) =>
+  String(t || '')
+    .replace(/^([a-z])/, (m) => m.toUpperCase())
+    .replace(/([.!?]\s+)([a-z])/g, (_, p, c) => p + c.toUpperCase());
 
 /**
  * CAN-SPAM requires a real physical postal address and a working opt-out in
@@ -249,7 +297,7 @@ export function canSpamFooter(env) {
   // address; it just makes the sender personally liable.
   return [
     '',
-    'if this is not for you, just say so and i will not write again.',
+    'If this is not relevant, just reply and let me know — I will not write again.',
     addr,
   ].join('\n');
 }
@@ -293,6 +341,35 @@ const PLAIN_ENGLISH = [
   [/runs events\/pop-ups.*/i, 'events and pop-ups are handled by hand'],
   [/large catalogue with no reviews\/retention tooling/i, 'a big catalogue with nothing bringing customers back'],
 ];
+
+/**
+ * Why a finding matters commercially.
+ *
+ * The drafts stated problems and stopped, which is why they read as
+ * complaints rather than as a reason to reply. A finding without a
+ * consequence gives the recipient nothing to act on.
+ */
+const CONSEQUENCE = [
+  [/phones|mobile/i, 'most people who find you are on a phone, so that is the version of your brand they actually see'],
+  [/one link page/i, 'anyone who wants to buy or commission has nowhere to go once they are interested'],
+  [/images load at full size|feel slow/i, 'pages that take a few seconds to appear lose a large share of visitors before they ever load'],
+  [/footer still says/i, 'small signals like that make people wonder whether the business is still running'],
+  [/nothing on the site about who you are/i, 'people buying from independent makers are buying the person as much as the product'],
+  [/no description, so search results/i, 'search engines show whatever text they can scrape, which is rarely the sentence you would choose'],
+  [/template that limits/i, 'the work ends up looking like everyone else on the same theme'],
+  [/DMs rather than a proper checkout/i, 'every order costs you a conversation, and the ones who message outside your hours mostly do not come back'],
+  [/no way to book you/i, 'interested people have to write an email and wait, which is where most enquiries quietly die'],
+  [/stockists have no way to order/i, 'wholesale is the highest-value channel and it is running through your inbox'],
+  [/captures emails/i, 'the visitors who are not ready to buy today leave without a trace'],
+  [/events and pop-ups are handled by hand/i, 'that is recurring admin that software does once and then forgets about'],
+  [/bringing customers back/i, 'repeat buyers are the cheapest revenue you have and nothing is prompting them'],
+];
+
+export function consequenceOf(finding) {
+  if (!finding) return null;
+  for (const [rx, why] of CONSEQUENCE) if (rx.test(finding)) return why;
+  return null;
+}
 
 export function plainEnglish(finding) {
   if (!finding) return null;
