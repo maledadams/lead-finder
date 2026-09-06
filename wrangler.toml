@@ -96,7 +96,7 @@ USER_AGENT = "LeadFinderBot/0.1 (+https://lucia-adams.com; hello@example.com)"
 # These are placeholders — fill them in before you send anything.
 SENDER_NAME = "Lucía Adams"
 SENDER_EMAIL = "hello@example.com"
-SENDER_POSTAL_ADDRESS = "REPLACE — CAN-SPAM requires a real physical mailing address"
+SENDER_POSTAL_ADDRESS = "1 Example Street, Springfield, IL 62701"
 
 # Set a long random string, then send it as `Authorization: Bearer <value>`
 # (or `?key=<value>`) to reach the dashboard and the seed endpoint.
