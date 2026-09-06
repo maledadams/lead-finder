@@ -262,12 +262,17 @@ function composeNoWebsiteDraft(entity, env, persona) {
  * is configured. Once SENDER_NAME is set it wins outright, otherwise drafts
  * end with "— lucia" immediately followed by "Lucía Adams".
  */
-/** A real signature block: name, site, address. */
+/**
+ * Signature block: name and reply address only.
+ *
+ * The domain is deliberately not listed. lucia-adams.com currently serves no
+ * website, and sending a prospect to an empty domain undercuts the entire
+ * pitch — particularly when the pitch is that their web presence should be
+ * better. Add it back once something is live there.
+ */
 function signature(env, persona) {
   const name = env?.SENDER_NAME || persona.sign || 'Lucía Adams';
-  const email = env?.SENDER_EMAIL;
-  const site = email ? email.split('@')[1] : null;
-  return [name, site, email].filter(Boolean).join('\n');
+  return [name, env?.SENDER_EMAIL].filter(Boolean).join('\n');
 }
 
 const sentence = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) + '.' : '');
