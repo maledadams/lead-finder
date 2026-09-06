@@ -12,59 +12,59 @@
 const PERSONAS = {
   alt_fashion: {
     label: 'Alternative fashion',
-    subject: (n) => `your ${n} site + one thing i noticed`,
-    open: (liked) => `i fell down a rabbit hole on your site and ${liked} genuinely stopped me`,
-    bridge: 'the pieces have so much attitude, and right now the site is the flattest part of the whole thing',
-    cta: 'want me to mock up what the shop page could look like? no strings, i just want to make it',
-    sign: '—lucia',
+    subject: (n) => `${n} — one thought about your site`,
+    open: (liked) => `i went down a bit of a rabbit hole on your site. ${liked} is genuinely great`,
+    bridge: 'the clothes have so much attitude. one thing stood out though:',
+    cta: 'want me to mock up what the shop page could look like? no strings — i just want to make it',
+    sign: 'lucía',
   },
   craft_goods: {
     label: 'Handmade & craft',
-    subject: (n) => `${n} — a small note about your shop page`,
-    open: (liked) => `i came across your work and ${liked} is lovely`,
-    bridge: 'the making is clearly the good part, and the site is not quite carrying it yet',
-    cta: 'happy to sketch out how the shop could feel closer to the actual objects — want me to?',
-    sign: '— lucia',
+    subject: (n) => `${n} — a small thing about your shop page`,
+    open: (liked) => `i came across your work this week. ${liked} is lovely`,
+    bridge: 'the making is clearly the good part. one thing i noticed:',
+    cta: 'i could sketch out how the shop might feel closer to the actual objects. want me to?',
+    sign: 'lucía',
   },
   beauty_wellness: {
     label: 'Beauty & skincare',
-    subject: (n) => `quick thought on the ${n} site`,
-    open: (liked) => `i was looking through your range and ${liked} caught me`,
-    bridge: 'the product story is strong; the site is not letting people feel it before they buy',
-    cta: 'i could put together a short walkthrough of what i would change on the product pages — useful?',
-    sign: '— lucia',
+    subject: (n) => `a thought on the ${n} product pages`,
+    open: (liked) => `i was looking through your range and ${liked} stayed with me`,
+    bridge: 'the product story is strong. one thing gets in its way though:',
+    cta: 'happy to walk you through what i would change on the product pages — worth a look?',
+    sign: 'lucía',
   },
   food_bev: {
     label: 'Food & beverage',
     subject: (n) => `${n} — one idea for the site`,
     open: (liked) => `found you recently and ${liked} sold me immediately`,
-    bridge: 'the brand has real appetite to it, and the site is the one place that goes quiet',
-    cta: 'want a quick teardown of the ordering flow? takes me ten minutes and it is yours either way',
-    sign: '— lucia',
+    bridge: 'the brand has real appetite to it. one thing stood out:',
+    cta: 'want a quick teardown of the ordering flow? ten minutes of my time, yours either way',
+    sign: 'lucía',
   },
   artist_portfolio: {
     label: 'Artist portfolio',
-    subject: (n) => `your work + your site (a note)`,
-    open: (liked) => `i spent a while with your work and ${liked} really got me`,
-    bridge: 'the work deserves a proper home — right now it is living somewhere much smaller than it is',
-    cta: 'i would love to show you a rough layout for a real portfolio site. want me to put one together?',
-    sign: '— lucia',
+    subject: () => `your work deserves a better home`,
+    open: (liked) => `i spent a while with your work today. ${liked} really got me`,
+    bridge: 'though one thing caught my eye:',
+    cta: 'i would love to show you a rough layout for a real portfolio. want me to put one together?',
+    sign: 'lucía',
   },
   creative_studio: {
     label: 'Creative studio',
     subject: (n) => `${n} — a thought on your own site`,
-    open: (liked) => `been looking at your work and ${liked} stands out`,
-    bridge: 'you clearly do this well for clients; your own site and internal workflow are the usual casualty',
+    open: (liked) => `been looking through your work and ${liked} stands out`,
+    bridge: 'you clearly do this well for clients. your own setup is the usual casualty:',
     cta: 'open to a short conversation about it? i work with studios on exactly this',
-    sign: '— Lucia',
+    sign: 'Lucía',
   },
   lifestyle_brand: {
     label: 'Creative lifestyle brand',
     subject: (n) => `a note on the ${n} site`,
     open: (liked) => `came across your brand and ${liked} is really nice`,
-    bridge: 'the identity is there; the site is not quite keeping up with it',
+    bridge: 'the identity is all there. one thing is lagging behind it:',
     cta: 'want me to put together a quick visual of what it could be? genuinely no pressure',
-    sign: '— lucia',
+    sign: 'lucía',
   },
 };
 
@@ -127,12 +127,11 @@ export function composeDraft(entity, env) {
     '',
     `${persona.open(lowerFirst(p.liked))}.`,
     '',
-    `${persona.bridge} — specifically, ${lowerFirst(plainEnglish(opportunity))}`,
+    `${persona.bridge} ${lowerFirst(plainEnglish(opportunity))}.`,
     '',
     ctaFor(persona, entity, det),
     '',
     signOff(env, persona),
-    '',
     canSpamFooter(env),
   ].filter((l) => l !== undefined).join('\n');
 
@@ -160,9 +159,9 @@ function composeObservationDraft(entity, env, persona, opportunity) {
   const body = [
     greeting,
     '',
-    `i was looking at ${name} and noticed something i thought was worth mentioning — ${lowerFirst(plainEnglish(opportunity))}.`,
+    `i was looking at ${name} and noticed ${lowerFirst(plainEnglish(opportunity))}.`,
     '',
-    'i build websites and small custom systems for independent creative businesses, so this is the sort of thing i notice whether or not anyone asked me to.',
+    'i design and build sites for small creative businesses, so it is the sort of thing i notice whether or not anyone asked.',
     '',
     ctaFor(persona, entity, {
       website_need: entity.website_opportunity ? 1 : 0,
@@ -170,7 +169,6 @@ function composeObservationDraft(entity, env, persona, opportunity) {
     }),
     '',
     signOff(env, persona),
-    '',
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
@@ -211,12 +209,11 @@ function composeNoWebsiteDraft(entity, env, persona) {
     '',
     `${observation} — ${point}`,
     '',
-    'i build sites for small creative businesses, and this is the kind of project i actually enjoy: something small, well made, that looks like you rather than a template.',
+    'i make small, well-built sites for creative businesses. things that look like the person behind them rather than a template.',
     '',
-    'if you ever want one, i would happily put together a rough idea of what it could look like first, free, so you can see it before deciding anything.',
+    'if you ever want one, i would happily put a rough idea together first so you can see it before deciding anything. free, no catch.',
     '',
     signOff(env, persona),
-    '',
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
@@ -236,9 +233,7 @@ function composeNoWebsiteDraft(entity, env, persona) {
  * end with "— lucia" immediately followed by "Lucía Adams".
  */
 function signOff(env, persona) {
-  const n = env?.SENDER_NAME;
-  if (n && n !== 'Lucia') return `— ${n}`;
-  return persona.sign;
+  return `— ${persona.sign || env?.SENDER_NAME || 'lucía'}`;
 }
 
 /**
@@ -247,11 +242,15 @@ function signOff(env, persona) {
  */
 export function canSpamFooter(env) {
   const addr = env?.SENDER_POSTAL_ADDRESS || '[SET SENDER_POSTAL_ADDRESS]';
-  const email = env?.SENDER_EMAIL || '[SET SENDER_EMAIL]';
+  // Softened to sound like a person rather than a compliance line, but it is
+  // still a working opt-out and a real postal address, because CAN-SPAM
+  // requires both in every commercial email regardless of which mailbox it is
+  // sent from. Removing them does not become legal by using a personal
+  // address; it just makes the sender personally liable.
   return [
-    '---',
-    `${addr}`,
-    `Not interested? Reply "unsubscribe" to ${email} and I won't contact you again.`,
+    '',
+    'if this is not for you, just say so and i will not write again.',
+    addr,
   ].join('\n');
 }
 
