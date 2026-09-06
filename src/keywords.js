@@ -277,12 +277,47 @@ export async function storeCandidates(db, candidates, source) {
   return added;
 }
 
+// When crt.sh is down we record it and stay away for a while.
+const SOURCE_HEALTH_KEY = '__crtsh_backoff';
+const BACKOFF_MINUTES = 90;
+
+async function sourceInBackoff(db) {
+  const row = await db
+    .prepare('SELECT last_run_at FROM source_cursor WHERE keyword = ?')
+    .bind(SOURCE_HEALTH_KEY)
+    .first();
+  if (!row?.last_run_at) return false;
+  return Date.now() - Date.parse(row.last_run_at) < BACKOFF_MINUTES * 60_000;
+}
+
+async function markSourceDown(db) {
+  await db
+    .prepare(
+      `INSERT INTO source_cursor (keyword, last_run_at, total_found, runs)
+       VALUES (?,?,0,1)
+       ON CONFLICT(keyword) DO UPDATE SET last_run_at = excluded.last_run_at, runs = runs + 1`
+    )
+    .bind(SOURCE_HEALTH_KEY, nowIso())
+    .run();
+}
+
 /**
  * Test unvalidated keywords against real crt.sh yield and mark them
  * ACTIVE or DEAD. This is what stops the list filling with plausible-sounding
  * terms that find nothing.
  */
 export async function validateBatch(db, limit, queryFn, userAgent, concurrency = 3) {
+  // Back off entirely while the source is known to be down.
+  //
+  // The circuit breaker alone was not enough: it stops a batch after six
+  // failures, but every subsequent call started another six. Ten consecutive
+  // attempts burned sixty pointless requests against a service that was
+  // already returning 502 to everything. Now the first failing batch parks the
+  // source and nothing touches it again for an hour and a half.
+  if (await sourceInBackoff(db)) {
+    return { tested: 0, active: 0, dead: 0, failed: 0, skipped: 'source-backoff' };
+  }
+
   const { results } = await db
     .prepare("SELECT keyword FROM keywords WHERE status = 'UNVALIDATED' ORDER BY added_at LIMIT ?")
     .bind(limit)
@@ -310,6 +345,7 @@ export async function validateBatch(db, limit, queryFn, userAgent, concurrency =
     // run. Keywords are never condemned by an outage.
     if (consecutiveFailures >= concurrency * 2) {
       out.stopped = 'source-unavailable';
+      await markSourceDown(db);
       break;
     }
 
