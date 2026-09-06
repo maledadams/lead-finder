@@ -280,3 +280,27 @@ test('obfuscated and Cloudflare-encoded emails are recovered', async () => {
   assert.ok(!isUsableEmail('noreply@brand.com'));
   assert.ok(isUsableEmail('sasha@brand.com'));
 });
+
+test('a design pitch never goes to the wrong department', async () => {
+  // A live queue put hr@nwframing.com on a cold design pitch.
+  const { displayName } = await import('../src/outreach.js');
+  assert.equal(displayName({ display_name: 'heathceramics' }), 'Heathceramics');
+  assert.equal(displayName({ domain: 'floodclothing.com' }), 'Floodclothing');
+  assert.equal(displayName({ display_name: 'Moth & Moon' }), 'Moth & Moon');
+  assert.equal(displayName({}), 'your site');
+});
+
+test('internal field labels never survive into a draft, from any source', async () => {
+  const { composeDraft } = await import('../src/outreach.js');
+  const env = { SENDER_NAME: 'L', SENDER_EMAIL: 'a@b.com', SENDER_POSTAL_ADDRESS: '1 St' };
+
+  // Regression: the strip ran on the stored fields but not on the model's own
+  // opportunity_headline, so this exact string reached a live draft.
+  const d = composeDraft({
+    niche: 'craft_goods', display_name: 'Heath Ceramics', contact_email: 'x@y.com',
+    personalization: JSON.stringify({ opportunity: 'system opportunity: booking flow for workshops' }),
+  }, env);
+  assert.ok(d);
+  assert.ok(!/system opportunity:/i.test(d.body), 'field label leaked');
+  assert.match(d.body, /booking flow for workshops/);
+});

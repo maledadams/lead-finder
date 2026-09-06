@@ -97,3 +97,13 @@ test('ambiguous common words are rejected before they cost a validation query', 
   assert.equal(titleToKeyword('Bovver boot'), 'bovverboot');
   assert.equal(titleToKeyword('Soft grunge'), 'softgrunge');
 });
+
+test('generic style adjectives are rejected like other ambiguous words', () => {
+  // "chic" survived validation with 1267 certs and 57 plausible domains, all
+  // of them chic salons and chic realty. Productive is not distinctive.
+  for (const w of ['Chic', 'Glam', 'Boho', 'Preppy', 'Edgy', 'Luxe', 'Trendy']) {
+    assert.equal(titleToKeyword(w), null, `"${w}" identifies nothing`);
+  }
+  // Compounds using them are still fine.
+  assert.equal(titleToKeyword('Boho-chic'), 'bohochic');
+});

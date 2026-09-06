@@ -91,7 +91,13 @@ export function composeDraft(entity, env) {
   // its own. Requiring one here would silently drop the strongest leads.
   if (p.no_website) return composeNoWebsiteDraft(entity, env, persona);
 
-  const opportunity = p.opportunity || firstClause(entity.website_opportunity) || firstClause(entity.system_opportunity);
+  // firstClause() also strips internal field labels. It has to be applied to
+  // the model's own opportunity_headline as well, not just the stored fields:
+  // a live draft went out reading "system opportunity: booking flow for
+  // workshops" because p.opportunity bypassed it.
+  const opportunity = firstClause(p.opportunity)
+    || firstClause(entity.website_opportunity)
+    || firstClause(entity.system_opportunity);
   if (!opportunity) return null;
 
   // The evidence rule. A compliment must be real: backed by page text, and
@@ -108,7 +114,7 @@ export function composeDraft(entity, env) {
   // to admire, the email simply opens on the observation instead.
   if (!hasRealCompliment) return composeObservationDraft(entity, env, persona, opportunity);
 
-  const name = entity.display_name || entity.domain || 'your';
+  const name = displayName(entity);
   const greeting = entity.founder_name ? `hi ${firstName(entity.founder_name)},` : 'hi!';
 
   const det = {
@@ -148,7 +154,7 @@ export function composeDraft(entity, env) {
 function composeObservationDraft(entity, env, persona, opportunity) {
   if (!entity.contact_email) return null;
 
-  const name = entity.display_name || entity.domain || 'your site';
+  const name = displayName(entity);
   const greeting = entity.founder_name ? `hi ${firstName(entity.founder_name)},` : 'hi!';
 
   const body = [
@@ -296,6 +302,28 @@ export function plainEnglish(finding) {
     if (rx.test(t)) return t.replace(rx, replacement);
   }
   return t;
+}
+
+/**
+ * A name fit to appear in an email.
+ *
+ * When og:site_name and the title both fail, the name falls back to the bare
+ * domain label, and a live draft opened "i was looking at heathceramics".
+ * Split the run-together words where it is safe and capitalise.
+ */
+export function displayName(entity) {
+  const raw = entity?.display_name || entity?.domain?.split('.')[0] || '';
+  if (!raw) return 'your site';
+
+  // Already looks human: has a space or internal capitals.
+  if (/\s/.test(raw) || /[a-z][A-Z]/.test(raw)) return raw;
+
+  const word = raw.replace(/[-_]+/g, ' ').trim();
+  if (word.includes(' ')) return word.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+
+  // A single lowercase run. Capitalising is safe; guessing word boundaries is
+  // not, so we do not try to split "heathceramics" into two words.
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
 const firstName = (n) => String(n).trim().split(/\s+/)[0];

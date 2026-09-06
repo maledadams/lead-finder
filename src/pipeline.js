@@ -632,11 +632,27 @@ function cleanTitle(title) {
   return t.length >= 2 && t.length <= 80 ? t : title.slice(0, 80) || null;
 }
 
-/** Prefer a named human over a role mailbox. */
+/**
+ * Pick the best address to write to.
+ *
+ * Three tiers, because not all role addresses are equal. A live queue put
+ * `hr@nwframing.com` on a design pitch — recruitment is the wrong department
+ * and the wrong impression. Those are excluded outright rather than merely
+ * ranked last; better no email, and the lead waits, than a pitch to payroll.
+ */
+const WRONG_DEPARTMENT =
+  /^(?:hr|jobs|careers|recruit\w*|hiring|billing|accounts?|accounting|invoices?|payroll|legal|compliance|privacy|dpo|security|abuse|webmaster|postmaster|noreply|no-reply|donotreply|unsubscribe|returns|shipping|warranty|wholesale-?apply)@/i;
+
+const GENERIC_INBOX =
+  /^(?:info|hello|hi|hey|contact|support|enquir\w*|inquir\w*|admin|orders?|help|team|press|media|studio|shop|mail|office)@/i;
+
 function pickEmail(emails) {
   if (!emails?.length) return null;
-  const personal = emails.find((e) => !/^(info|hello|hi|contact|support|sales|admin|orders|help|team|press|noreply|no-reply)@/i.test(e));
-  return personal || emails[0];
+  const usable = emails.filter((e) => !WRONG_DEPARTMENT.test(e));
+  if (!usable.length) return null;
+
+  // A named human first, then a general inbox.
+  return usable.find((e) => !GENERIC_INBOX.test(e)) || usable[0];
 }
 
 /** Links are huge and only needed during the run; don't store them. */

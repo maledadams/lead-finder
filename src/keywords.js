@@ -115,6 +115,11 @@ const AMBIGUOUS_COMMON = new Set([
   'chain', 'plain', 'sharp', 'smart', 'casual', 'formal', 'classic', 'modern',
   'vintage', 'retro', 'basic', 'simple', 'natural', 'organic', 'clean',
   'sulu', 'geek', 'nerd', 'mod', 'ska', 'emo',
+  // Style adjectives. "chic" passed validation with 1,267 certificates and 57
+  // plausible domains — chic salons, chic nails, chic realty. Same failure as
+  // "camp": productive, but it identifies nothing.
+  'chic', 'glam', 'boho', 'preppy', 'grunge', 'edgy', 'luxe', 'posh',
+  'trendy', 'stylish', 'elegant', 'urban', 'street', 'wild', 'pure',
 ]);
 
 const TOO_GENERIC = new Set([
