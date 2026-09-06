@@ -37,8 +37,23 @@ export function allowedEmails(env) {
     .filter(Boolean);
 }
 
+/**
+ * Google sign-in counts as configured only with real credentials.
+ *
+ * Placeholders are truthy, which is worse than useless: the dashboard offered
+ * a "Continue with Google" button that could only ever fail, because the
+ * client id was still the literal string REPLACE_WITH_... Treat obvious
+ * placeholders as absent so the shared key remains the way in.
+ */
+const PLACEHOLDER = /^(?:replace|placeholder|todo|changeme|set-?me|xxx)/i;
+
 export function googleConfigured(env) {
-  return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.SESSION_SECRET);
+  const id = env.GOOGLE_CLIENT_ID || '';
+  const secret = env.GOOGLE_CLIENT_SECRET || '';
+  if (!id || !secret || !env.SESSION_SECRET) return false;
+  if (PLACEHOLDER.test(id) || PLACEHOLDER.test(secret)) return false;
+  // A real Google web client id always carries this suffix.
+  return id.endsWith('.apps.googleusercontent.com');
 }
 
 async function hmac(secret, message) {

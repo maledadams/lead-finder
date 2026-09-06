@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { allowedEmails, googleConfigured, verifySession, readCookie } from '../src/auth.js';
 
 const ENV = {
-  GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'csec',
+  GOOGLE_CLIENT_ID: '123-abc.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'GOCSPX-csec',
   SESSION_SECRET: 'a-long-random-session-secret-value',
   ALLOWED_EMAILS: 'owner@example.com, teammate@example.com ',
 };
@@ -70,4 +70,21 @@ test('cookies are read by exact name', () => {
   assert.equal(readCookie(req, '__Host-lf_session'), 'abc');
   assert.equal(readCookie(req, 'lf_session'), null);
   assert.equal(readCookie({ headers: { get: () => '' } }, 'x'), null);
+});
+
+test('placeholder Google credentials count as not configured', () => {
+  const base = { SESSION_SECRET: 'x', ALLOWED_EMAILS: 'a@b.com' };
+  // These were live in production and produced a sign-in button that could
+  // only ever fail.
+  assert.equal(googleConfigured({ ...base,
+    GOOGLE_CLIENT_ID: 'REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID',
+    GOOGLE_CLIENT_SECRET: 'placeholder-set-me' }), false);
+  // A real client id always carries Google's suffix.
+  assert.equal(googleConfigured({ ...base,
+    GOOGLE_CLIENT_ID: '123-abc.apps.googleusercontent.com',
+    GOOGLE_CLIENT_SECRET: 'GOCSPX-realsecret' }), true);
+  // A plausible-looking but wrong id (e.g. a pasted UUID) is refused.
+  assert.equal(googleConfigured({ ...base,
+    GOOGLE_CLIENT_ID: '6b0b2f2a-f92e-460e-b76e-57af536fd14d',
+    GOOGLE_CLIENT_SECRET: 'something' }), false);
 });
