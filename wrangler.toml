@@ -87,7 +87,7 @@ REQUIRE_ACCESS = "false"
 
 # Zoho Mail sending. The client secret is a secret; the refresh token is
 # obtained once via /api/zoho/connect and stored in D1.
-ZOHO_CLIENT_ID = "REPLACE_WITH_ZOHO_CLIENT_ID"
+ZOHO_CLIENT_ID = "1000.TZQ2SZONKI7N9111083IQA2ZS9WVEC"
 ZOHO_REGION = "com"          # com | eu | in | au | jp
 DAILY_SEND_CAP = "30"        # a hard ceiling no bug can exceed
 
