@@ -11,7 +11,8 @@ import {
   completeLogin, googleConfigured, loginPage, logout, sessionFrom, startLogin, verifySession,
 } from './auth.js';
 import {
-  authorizeUrl, exchangeCode, sendMail, sentToday, zohoConfigured, zohoConnected,
+  authorizeUrl, exchangeCode, sendMail, sentToday, signState, verifyState,
+  zohoConfigured, zohoConnected,
 } from './zoho.js';
 
 /**
@@ -176,6 +177,34 @@ export default {
     // which closes the bypass that would otherwise make Access decorative.
     if (env.REQUIRE_ACCESS === 'true' && !hasAccessAssertion(request)) {
       return json({ error: 'access required' }, 403);
+    }
+
+    // ---- Zoho OAuth callback --------------------------------------------
+    // Outside the auth gate on purpose: Zoho sends the browser here with only
+    // ?code and ?state, so requiring the dashboard key would reject the one
+    // request this endpoint exists to handle. The signed state is what proves
+    // the flow was started from an authenticated session.
+    if (url.pathname === '/api/zoho/callback' && request.method === 'GET') {
+      const code = url.searchParams.get('code');
+      const state = url.searchParams.get('state');
+
+      if (!code) {
+        return json({ connected: false, error: url.searchParams.get('error') || 'no code returned' }, 400);
+      }
+      if (!(await verifyState(env, state))) {
+        return json({ connected: false, error: 'state invalid or expired — start again from /api/zoho/connect' }, 400);
+      }
+
+      const res = await exchangeCode(env, db, code, `${url.origin}/api/zoho/callback`);
+      if (!res.ok) return json({ connected: false, error: res.error }, 400);
+      return new Response(
+        `<!doctype html><meta charset="utf-8"><title>Connected</title>
+         <body style="font:16px/1.6 system-ui;max-width:34em;margin:18vh auto;padding:0 1em">
+         <h1 style="font-size:20px">Zoho connected</h1>
+         <p>Sending is now enabled. Go back to the dashboard and each lead will
+         have a <b>Send it</b> button.</p></body>`,
+        { status: 200, headers: { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8' } }
+      );
     }
 
     // ---- Google sign-in -------------------------------------------------
@@ -354,19 +383,11 @@ export default {
           return json({ error: 'set ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET first' }, 503);
         }
         const redirectUri = `${url.origin}/api/zoho/callback`;
+        const state = await signState(env);
         return new Response(null, {
           status: 302,
-          headers: { location: authorizeUrl(env, redirectUri, 'lf'), 'cache-control': 'no-store' },
+          headers: { location: authorizeUrl(env, redirectUri, state), 'cache-control': 'no-store' },
         });
-      }
-
-      if (url.pathname === '/api/zoho/callback' && request.method === 'GET') {
-        const code = url.searchParams.get('code');
-        if (!code) return json({ error: 'no code returned', detail: url.searchParams.get('error') }, 400);
-        const res = await exchangeCode(env, db, code, `${url.origin}/api/zoho/callback`);
-        return json(res.ok
-          ? { connected: true, account: res.account, next: 'Sending is now enabled in the dashboard.' }
-          : { connected: false, error: res.error }, res.ok ? 200 : 400);
       }
 
       if (url.pathname === '/api/zoho/status' && request.method === 'GET') {
