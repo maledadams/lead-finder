@@ -147,11 +147,9 @@ export function composeDraft(entity, env) {
     `If it would be useful, I can put together ${persona.offer} — free, and with no expectation that you work with me afterwards.`,
     '',
     'Would you like me to send it over this week?',
-    '',
-    'Best,',
-    signature(env, persona),
+    signature(),
     canSpamFooter(env),
-  ].filter((l) => l !== undefined).join('\n');
+  ].filter((l) => l !== undefined && l !== null).join('\n');
 
   return {
     subject: persona.subject(name),
@@ -191,9 +189,7 @@ function composeObservationDraft(entity, env, persona, opportunity) {
     `If it would be useful, I can put together ${persona.offer} — free, and with no expectation that you work with me afterwards.`,
     '',
     'Would you like me to send it over this week?',
-    '',
-    'Best,',
-    signature(env, persona),
+    signature(),
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
@@ -241,9 +237,7 @@ function composeNoWebsiteDraft(entity, env, persona) {
     'If it would be useful, I can put together a rough idea of what a site could look like for you — free, and with no expectation that you work with me afterwards.',
     '',
     'Would you like me to send it over this week?',
-    '',
-    'Best,',
-    signature(env, persona),
+    signature(),
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
@@ -263,16 +257,17 @@ function composeNoWebsiteDraft(entity, env, persona) {
  * end with "— lucia" immediately followed by "Lucía Adams".
  */
 /**
- * Signature block: name and reply address only.
+ * No signature in the draft body.
  *
- * The domain is deliberately not listed. lucia-adams.com currently serves no
- * website, and sending a prospect to an empty domain undercuts the entire
- * pitch — particularly when the pitch is that their web presence should be
- * better. Add it back once something is live there.
+ * The mail client appends the real one. Two signatures in a single email is
+ * the clearest possible tell that the message was machine-assembled, which is
+ * exactly the impression this outreach is trying to avoid.
+ *
+ * The CAN-SPAM footer is separate and still required — a postal address and a
+ * working opt-out are legal obligations, not a sign-off.
  */
-function signature(env, persona) {
-  const name = env?.SENDER_NAME || persona.sign || 'Lucía Adams';
-  return [name, env?.SENDER_EMAIL].filter(Boolean).join('\n');
+function signature() {
+  return null;
 }
 
 const sentence = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) + '.' : '');
