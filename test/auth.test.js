@@ -88,3 +88,24 @@ test('placeholder Google credentials count as not configured', () => {
     GOOGLE_CLIENT_ID: '6b0b2f2a-f92e-460e-b76e-57af536fd14d',
     GOOGLE_CLIENT_SECRET: 'something' }), false);
 });
+
+test('Zoho is only considered usable with real credentials', async () => {
+  const { zohoConfigured, ZOHO_SCOPES, authorizeUrl } = await import('../src/zoho.js');
+  assert.equal(zohoConfigured({}), false);
+  assert.equal(zohoConfigured({ ZOHO_CLIENT_ID: 'x' }), false);
+  assert.equal(zohoConfigured({ ZOHO_CLIENT_ID: 'x', ZOHO_CLIENT_SECRET: 'y' }), true);
+
+  // Only the two scopes needed to send. Nothing that can read existing mail.
+  assert.equal(ZOHO_SCOPES, 'ZohoMail.accounts.READ,ZohoMail.messages.CREATE');
+  assert.ok(!/ALL|DELETE|UPDATE|folders/i.test(ZOHO_SCOPES));
+
+  // offline access is what yields a refresh token; without it sending stops
+  // working an hour after setup.
+  const u = authorizeUrl({ ZOHO_CLIENT_ID: 'cid' }, 'https://x.test/cb', 's');
+  assert.match(u, /access_type=offline/);
+  assert.match(u, /accounts\.zoho\.com/);
+
+  // Regions route to the right data centre.
+  assert.match(authorizeUrl({ ZOHO_CLIENT_ID: 'c', ZOHO_REGION: 'eu' }, 'https://x.test/cb', 's'),
+    /accounts\.zoho\.eu/);
+});

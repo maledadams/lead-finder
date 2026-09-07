@@ -17,7 +17,7 @@ const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-export async function renderDashboard(db, env, day, nonce = '', signedInAs = null) {
+export async function renderDashboard(db, env, day, nonce = '', signedInAs = null, sending = null) {
   const [queue, counts, lessons, recent] = await Promise.all([
     db.prepare(
       `SELECT o.id AS oid, o.rank, o.subject, o.body, o.status, o.persona,
@@ -43,6 +43,7 @@ export async function renderDashboard(db, env, day, nonce = '', signedInAs = nul
     ).all(),
   ]);
 
+  const canSend = Boolean(sending?.connected);
   const rows = queue.results || [];
   const todo = rows.filter((r) => r.status === 'DRAFT');
   const done = rows.filter((r) => r.status !== 'DRAFT');
@@ -116,17 +117,20 @@ export async function renderDashboard(db, env, day, nonce = '', signedInAs = nul
 
 <div class="prog">
   <span><b>${todo.length}</b> to review</span>
+  ${canSend
+    ? `<span style="color:var(--go)"><b>${esc(sending.sent_today)}/${esc(sending.daily_cap)}</b> sent via Zoho</span>`
+    : '<span style="color:var(--warn)">sending not connected — copy &amp; paste</span>'}
   <span style="color:var(--go)"><b>${c.sent || 0}</b> sent today</span>
   <span style="color:var(--dim)"><b>${c.skipped || 0}</b> skipped</span>
   <span style="color:var(--dim);margin-left:auto"><b>${c.all_time || 0}</b> contacted all time</span>
 </div>
 
-${todo.length ? todo.map(card).join('') : `<div class="empty">
+${todo.length ? todo.map((r) => card(r, canSend)).join('') : `<div class="empty">
   <b style="color:var(--ink)">Nothing to review right now.</b><br>
   New leads are found overnight and appear here each morning.
 </div>`}
 
-${done.length ? `<h2>Already handled today</h2>${done.map(card).join('')}` : ''}
+${done.length ? `<h2>Already handled today</h2>${done.map((r) => card(r, canSend)).join('')}` : ''}
 
 ${(lessons.results || []).length ? `<h2>What this has learned from you</h2>
 <div class="learned"><ul style="margin:0;padding-left:18px">
@@ -155,8 +159,9 @@ async function post(path, body){
     headers: Object.assign({'content-type':'application/json'}, key ? {authorization:'Bearer '+key} : {}),
     body: body ? JSON.stringify(body) : undefined
   });
-  if(!r.ok) throw new Error('Request failed (' + r.status + ')');
-  return r.json();
+  const data = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(data.error || ('request failed (' + r.status + ')'));
+  return data;
 }
 document.addEventListener('click', async (ev) => {
   const b = ev.target.closest('button');
@@ -173,6 +178,18 @@ document.addEventListener('click', async (ev) => {
   if(b.dataset.open === 'reason'){
     card.querySelector('.reason').classList.add('open');
     card.querySelector('.reason textarea').focus();
+    return;
+  }
+  if(b.dataset.act === 'send'){
+    b.disabled = true; b.textContent = 'Sending…';
+    try {
+      const res = await post('/api/send/' + id);
+      flash('Sent to ' + res.to);
+      setTimeout(()=>location.reload(), 700);
+    } catch(e){
+      b.disabled = false; b.textContent = 'Send it';
+      flash('Not sent — ' + e.message);
+    }
     return;
   }
   if(b.dataset.act === 'sent'){
@@ -196,7 +213,7 @@ document.addEventListener('click', async (ev) => {
 </div></body></html>`;
 }
 
-function card(r) {
+function card(r, CAN_SEND = false) {
   const p = safe(r.personalization) || {};
   const power = safe(r.power_signals) || [];
   const niche = NICHES[r.niche]?.label || 'Creative business';
@@ -238,8 +255,11 @@ function card(r) {
 
   ${isDone ? '' : `
   <div class="acts">
+    ${CAN_SEND
+      ? '<button class="go" data-act="send">Send it</button>'
+      : '<button class="go" data-act="sent">I sent this</button>'}
     <button data-copy="1">Copy email</button>
-    <button class="go" data-act="sent">I sent this</button>
+    ${CAN_SEND ? '<button data-act="sent">Already sent it myself</button>' : ''}
     <button class="no" data-open="reason">Skip &hellip;</button>
   </div>
   <div class="reason">

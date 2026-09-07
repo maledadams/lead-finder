@@ -10,6 +10,9 @@ import { deriveLessons, recordFeedback, rerankOne } from './learning.js';
 import {
   completeLogin, googleConfigured, loginPage, logout, sessionFrom, startLogin, verifySession,
 } from './auth.js';
+import {
+  authorizeUrl, exchangeCode, sendMail, sentToday, zohoConfigured, zohoConnected,
+} from './zoho.js';
 
 /**
  * Headers applied to every response.
@@ -206,7 +209,12 @@ export default {
       if (url.pathname === '/' || url.pathname === '/dashboard') {
         const day = url.searchParams.get('day') || todayStr();
         const nonce = btoa(crypto.randomUUID()).replace(/=+$/, '');
-        const html = await renderDashboard(db, env, day, nonce, signedInAs);
+        const sending = {
+          connected: zohoConfigured(env) && await zohoConnected(db),
+          sent_today: await sentToday(db),
+          daily_cap: Number(env.DAILY_SEND_CAP || 30),
+        };
+        const html = await renderDashboard(db, env, day, nonce, signedInAs, sending);
         return new Response(html, {
           headers: {
             ...SECURITY_HEADERS,
@@ -338,6 +346,83 @@ export default {
         const body = await request.json().catch(() => ({}));
         if (!body.key) return json({ error: 'key required (email or "domain:x.com")' }, 400);
         return json(await suppress(db, String(body.key).toLowerCase().trim(), body.reason || 'opt-out'));
+      }
+
+      // ---- Zoho: connect once, then send from the dashboard ---------------
+      if (url.pathname === '/api/zoho/connect' && request.method === 'GET') {
+        if (!zohoConfigured(env)) {
+          return json({ error: 'set ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET first' }, 503);
+        }
+        const redirectUri = `${url.origin}/api/zoho/callback`;
+        return new Response(null, {
+          status: 302,
+          headers: { location: authorizeUrl(env, redirectUri, 'lf'), 'cache-control': 'no-store' },
+        });
+      }
+
+      if (url.pathname === '/api/zoho/callback' && request.method === 'GET') {
+        const code = url.searchParams.get('code');
+        if (!code) return json({ error: 'no code returned', detail: url.searchParams.get('error') }, 400);
+        const res = await exchangeCode(env, db, code, `${url.origin}/api/zoho/callback`);
+        return json(res.ok
+          ? { connected: true, account: res.account, next: 'Sending is now enabled in the dashboard.' }
+          : { connected: false, error: res.error }, res.ok ? 200 : 400);
+      }
+
+      if (url.pathname === '/api/zoho/status' && request.method === 'GET') {
+        return json({
+          configured: zohoConfigured(env),
+          connected: await zohoConnected(db),
+          sent_today: await sentToday(db),
+          daily_cap: Number(env.DAILY_SEND_CAP || 30),
+        });
+      }
+
+      // Send one reviewed draft. A person pressed a button to get here.
+      const send = url.pathname.match(/^\/api\/send\/([\w-]+)$/);
+      if (send && request.method === 'POST') {
+        const outreachId = send[1];
+
+        const row = await db.prepare(
+          `SELECT o.id, o.subject, o.body, o.status, o.entity_id, e.contact_email, e.display_name
+           FROM outreach o JOIN entities e ON e.id = o.entity_id WHERE o.id = ?`
+        ).bind(outreachId).first();
+
+        if (!row) return json({ error: 'not-found' }, 404);
+        // Never send the same draft twice, whatever the caller does.
+        if (row.status === 'SENT') return json({ error: 'already-sent' }, 409);
+        if (!row.contact_email) return json({ error: 'no-recipient' }, 400);
+
+        // A cap that a bug cannot talk its way past.
+        const cap = Number(env.DAILY_SEND_CAP || 30);
+        const already = await sentToday(db);
+        if (already >= cap) {
+          return json({ error: `daily send cap reached (${cap})`, sent_today: already }, 429);
+        }
+
+        const result = await sendMail(env, db, {
+          to: row.contact_email,
+          subject: row.subject,
+          body: row.body,
+        });
+
+        if (!result.ok) {
+          // Record the failure and leave the draft exactly as it was, so it
+          // can be retried or read rather than silently lost.
+          await db.prepare('UPDATE outreach SET send_error = ? WHERE id = ?')
+            .bind(String(result.error).slice(0, 300), outreachId).run();
+          return json({ sent: false, error: result.error }, 502);
+        }
+
+        await db.prepare("UPDATE outreach SET sent_via = 'zoho', send_error = NULL WHERE id = ?")
+          .bind(outreachId).run();
+        await markSent(db, outreachId);
+        await recordFeedback(db, {
+          entityId: row.entity_id, outreachId, decision: 'SENT', reason: null,
+          reviewer: signedInAs || 'dashboard',
+        });
+
+        return json({ sent: true, to: row.contact_email, sent_today: already + 1, cap });
       }
 
       // ---- manual triggers ----------------------------------------------
