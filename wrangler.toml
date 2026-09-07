@@ -3,6 +3,11 @@ main = "src/index.js"
 compatibility_date = "2025-09-01"
 compatibility_flags = ["nodejs_compat"]
 
+# workers.dev is off deliberately. It is a second hostname reaching the same
+# Worker without passing through Cloudflare Access, which would make the Access
+# policy on leads.maledadams.work decorative.
+workers_dev = false
+
 # ---------------------------------------------------------------------------
 # Cron schedule.
 #

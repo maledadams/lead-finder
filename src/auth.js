@@ -283,8 +283,15 @@ function decodeJwtPayload(jwt) {
   }
 }
 
-/** The sign-in page. Deliberately plain: one button, no explanation needed. */
-export function loginPage(message = '') {
+/**
+ * The page a browser gets when it is not signed in.
+ *
+ * Previously an unauthenticated visit returned raw JSON, which is the wrong
+ * thing to show a person: it looks broken rather than protected. This is shown
+ * whether or not Google sign-in is configured — when it is not, it says how to
+ * get in rather than offering a button that cannot work.
+ */
+export function loginPage(message = '', googleReady = true) {
   return new Response(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -304,9 +311,11 @@ export function loginPage(message = '') {
         text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;font-size:15px}
 </style></head><body><div class="box">
   <h1>Lead review</h1>
-  <p>Sign in with the Google account you were given access with.</p>
+  ${googleReady
+    ? '<p>Sign in with the Google account you were given access with.</p>'
+    : '<p>This tool is private. Open it using the link you were given, which carries your access key.</p>'}
   ${message ? `<div class="err">${message.replace(/[<>&]/g, '')}</div>` : ''}
-  <a class="btn" href="/auth/login">Continue with Google</a>
+  ${googleReady ? '<a class="btn" href="/auth/login">Continue with Google</a>' : ''}
 </div></body></html>`, {
     status: 200,
     headers: {

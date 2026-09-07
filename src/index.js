@@ -8,7 +8,7 @@ import { harvestWikipedia, mineCorpus, storeCandidates, validateBatch } from './
 import { queryCertTransparency } from './sources.js';
 import { deriveLessons, recordFeedback, rerankOne } from './learning.js';
 import {
-  completeLogin, exchangeKeyForSession, googleConfigured, loginPage, logout,
+  completeLogin, exchangeKeyForSession, googleConfigured, logout,
   sessionFrom, startLogin, verifySession,
 } from './auth.js';
 import {
@@ -237,9 +237,13 @@ export default {
 
     if (!signedInAs && !hasKey) {
       if (!(await withinLimit(env.AUTH_LIMITER, `auth:${who}`))) return tooMany(120);
-      // A browser gets a sign-in page; anything else gets JSON.
-      const wantsHtml = (request.headers.get('accept') || '').includes('text/html');
-      if (wantsHtml && googleConfigured(env)) return loginPage();
+      // No sign-in page of our own.
+      //
+      // Cloudflare Access sits in front of leads.maledadams.work and redirects
+      // an unauthenticated browser to its own login before the request ever
+      // reaches this Worker. Anything arriving here without credentials is a
+      // machine, or a request that bypassed Access, and either way JSON is the
+      // right answer.
       return json({ error: 'unauthorized' }, 401);
     }
 
