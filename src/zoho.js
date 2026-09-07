@@ -61,6 +61,38 @@ export async function zohoConnected(db) {
 
 // --- oauth ------------------------------------------------------------------
 
+// The callback cannot carry the dashboard key: Zoho redirects the browser back
+// with only ?code and ?state, so a key-guarded callback rejects the very
+// request it exists to receive. The state is signed instead, which proves the
+// flow was started by someone who was authenticated at the time.
+const enc = new TextEncoder();
+
+async function hmac(secret, message) {
+  const key = await crypto.subtle.importKey(
+    'raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  return btoa(String.fromCharCode(...new Uint8Array(sig)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** A state value only this Worker could have produced, valid for 15 minutes. */
+export async function signState(env) {
+  const nonce = `${Date.now()}`;
+  return `${nonce}.${await hmac(env.SESSION_SECRET || env.ZOHO_CLIENT_SECRET, nonce)}`;
+}
+
+export async function verifyState(env, state) {
+  const [nonce, sig] = String(state || '').split('.');
+  if (!nonce || !sig) return false;
+  const expected = await hmac(env.SESSION_SECRET || env.ZOHO_CLIENT_SECRET, nonce);
+  if (sig.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
+  if (diff !== 0) return false;
+  return Date.now() - Number(nonce) < 15 * 60_000;
+}
+
 /** Where the user is sent to grant access. */
 export function authorizeUrl(env, redirectUri, state) {
   const params = new URLSearchParams({
