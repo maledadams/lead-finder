@@ -55,3 +55,21 @@ test('the email validator rejects addresses carrying line breaks', async () => {
     assert.equal(isUsableEmail(bad), false, 'must not accept a newline in an address');
   }
 });
+
+test('a key-derived session is not treated as an allowlisted person', async () => {
+  const { verifySession } = await import('../src/auth.js');
+  const { createHmac } = await import('node:crypto');
+  const ENV = { SESSION_SECRET: 'a-long-secret', ALLOWED_EMAILS: 'someone@else.com' };
+
+  const mint = (subject) => {
+    const p = Buffer.from(JSON.stringify({ e: subject, x: Date.now() + 60000 })).toString('base64url');
+    return `${p}.${createHmac('sha256', ENV.SESSION_SECRET).update(p).digest('base64url')}`;
+  };
+
+  // The shared key is its own credential, so its session bypasses the email
+  // allowlist by design...
+  assert.equal(await verifySession(ENV, mint('dashboard-key')), 'dashboard-key');
+  // ...but that must not become a way to forge an identity for anyone else.
+  assert.equal(await verifySession(ENV, mint('stranger@evil.com')), null);
+  assert.equal(await verifySession(ENV, mint('someone@else.com')), 'someone@else.com');
+});

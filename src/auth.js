@@ -102,6 +102,10 @@ export async function verifySession(env, token) {
   }
   if (!data?.e || !data?.x || Date.now() > data.x) return null;
 
+  // A session minted from the shared key is not a person and has no entry in
+  // the allowlist; the key itself was the credential.
+  if (data.e === 'dashboard-key') return data.e;
+
   // Re-check the allowlist on every request, so removing someone takes effect
   // immediately rather than when their cookie happens to expire.
   if (!allowedEmails(env).includes(String(data.e).toLowerCase())) return null;
@@ -239,6 +243,33 @@ export function logout() {
 
 export function sessionFrom(request) {
   return readCookie(request, SESSION_COOKIE);
+}
+
+/**
+ * Trade a URL key for a session cookie.
+ *
+ * The dashboard was opened as ?key=<secret>, which puts a long-lived
+ * credential in the address bar, browser history, and anything that reads a
+ * URL over someone's shoulder. Presenting it once is unavoidable — it is the
+ * only credential there is — but keeping it there is not.
+ *
+ * So a valid key is exchanged immediately for the same signed session cookie
+ * that Google sign-in produces, and the browser is redirected to the clean
+ * URL. The key never appears again.
+ */
+export async function exchangeKeyForSession(env, url) {
+  const session = await signSession(env, 'dashboard-key');
+  const clean = new URL(url);
+  clean.searchParams.delete('key');
+
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: clean.pathname + (clean.search || ''),
+      'set-cookie': cookie(SESSION_COOKIE, session, SESSION_HOURS * 3600),
+      'cache-control': 'no-store',
+    },
+  });
 }
 
 function decodeJwtPayload(jwt) {

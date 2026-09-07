@@ -147,7 +147,8 @@ ${(recent.results || []).length ? `<h2>Recent notes</h2>
 <div class="flash" id="flash"></div>
 
 <script nonce="${esc(nonce)}">
-const key = new URLSearchParams(location.search).get('key') || '';
+// No key here. The session cookie is sent automatically and the URL stays
+// clean, so the credential is never in the address bar or in history.
 const flash = (t) => {
   const f = document.getElementById('flash');
   f.textContent = t; f.classList.add('on');
@@ -156,7 +157,8 @@ const flash = (t) => {
 async function post(path, body){
   const r = await fetch(path, {
     method:'POST',
-    headers: Object.assign({'content-type':'application/json'}, key ? {authorization:'Bearer '+key} : {}),
+    headers: {'content-type':'application/json'},
+    credentials: 'same-origin',
     body: body ? JSON.stringify(body) : undefined
   });
   const data = await r.json().catch(() => ({}));
