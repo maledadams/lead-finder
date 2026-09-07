@@ -211,6 +211,14 @@ async function fetchAccount(env, token) {
 export async function sendMail(env, db, { to, subject, body, fromAddress }) {
   if (!zohoConfigured(env)) return { ok: false, error: 'zoho-not-configured' };
 
+  // Last line of defence. Subject and recipient are derived from scraped
+  // pages, so a control character in either could inject a mail header. The
+  // composer strips them too; this refuses regardless of how it was called.
+  const cleanSubject = String(subject ?? '').replace(/[\r\n\u0000]+/g, ' ').trim().slice(0, 200);
+  const cleanTo = String(to ?? '').trim();
+  if (/[\r\n\u0000,;<>]/.test(cleanTo)) return { ok: false, error: 'invalid-recipient' };
+  if (!/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(cleanTo)) return { ok: false, error: 'invalid-recipient' };
+
   const tok = await accessToken(env, db);
   if (!tok.ok) return { ok: false, error: `auth: ${tok.error}` };
 
@@ -229,8 +237,8 @@ export async function sendMail(env, db, { to, subject, body, fromAddress }) {
       },
       body: JSON.stringify({
         fromAddress: from,
-        toAddress: to,
-        subject,
+        toAddress: cleanTo,
+        subject: cleanSubject,
         content: body,
         mailFormat: 'plaintext',
       }),

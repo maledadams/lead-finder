@@ -152,7 +152,7 @@ export function composeDraft(entity, env) {
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
   return {
-    subject: persona.subject(name),
+    subject: stripControl(persona.subject(name)).slice(0, 200),
     body,
     cta: persona.offer,
     persona: entity.niche || 'lifestyle_brand',
@@ -194,7 +194,7 @@ function composeObservationDraft(entity, env, persona, opportunity) {
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
   return {
-    subject: `${name} — a few notes on your site`,
+    subject: stripControl(`${name} — a few notes on your site`).slice(0, 200),
     body,
     cta: 'observation-led',
     persona: `${entity.niche || 'lifestyle_brand'}:observation`,
@@ -242,7 +242,7 @@ function composeNoWebsiteDraft(entity, env, persona) {
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
   return {
-    subject: `${name} — a question about your website`,
+    subject: stripControl(`${name} — a question about your website`).slice(0, 200),
     body,
     cta: 'offer a free rough visual before any commitment',
     persona: `${entity.niche || 'lifestyle_brand'}:no_website`,
@@ -388,7 +388,10 @@ export function plainEnglish(finding) {
  * Split the run-together words where it is safe and capitalise.
  */
 export function displayName(entity) {
-  const raw = entity?.display_name || entity?.domain?.split('.')[0] || '';
+  // Business names come from scraped <title> and og:site_name, so they are
+  // attacker-controlled: anyone who owns a site the crawler visits chooses
+  // this string. Strip control characters before it can reach a mail header.
+  const raw = stripControl(entity?.display_name || entity?.domain?.split('.')[0] || '');
   if (!raw) return 'your site';
 
   // Already looks human: has a space or internal capitals.
@@ -400,6 +403,21 @@ export function displayName(entity) {
   // A single lowercase run. Capitalising is safe; guessing word boundaries is
   // not, so we do not try to split "heathceramics" into two words.
   return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+/**
+ * Remove anything that could break out of a header line.
+ *
+ * CR and LF are the ones that matter — a name like "Brand\nBcc: victim@x"
+ * reaching a mail header is header injection. Other control characters go too,
+ * since none of them belong in a business name.
+ */
+export function stripControl(s) {
+  return String(s ?? '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 const firstName = (n) => String(n).trim().split(/\s+/)[0];
