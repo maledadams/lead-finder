@@ -8,7 +8,8 @@ import { harvestWikipedia, mineCorpus, storeCandidates, validateBatch } from './
 import { queryCertTransparency } from './sources.js';
 import { deriveLessons, recordFeedback, rerankOne } from './learning.js';
 import {
-  completeLogin, googleConfigured, loginPage, logout, sessionFrom, startLogin, verifySession,
+  completeLogin, exchangeKeyForSession, googleConfigured, loginPage, logout,
+  sessionFrom, startLogin, verifySession,
 } from './auth.js';
 import {
   authorizeUrl, exchangeCode, sendMail, sentToday, signState, verifyState,
@@ -224,6 +225,15 @@ export default {
     // and cron keep the key.
     const signedInAs = await verifySession(env, sessionFrom(request));
     const hasKey = authorized(request, env);
+
+    // A key in the query string is swapped for a session cookie and removed
+    // from the address bar. Only for browser navigations — an API caller
+    // using ?key= should get its response, not a redirect.
+    if (!signedInAs && hasKey && url.searchParams.has('key') &&
+        request.method === 'GET' &&
+        (request.headers.get('accept') || '').includes('text/html')) {
+      return exchangeKeyForSession(env, request.url);
+    }
 
     if (!signedInAs && !hasKey) {
       if (!(await withinLimit(env.AUTH_LIMITER, `auth:${who}`))) return tooMany(120);
