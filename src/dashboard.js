@@ -151,8 +151,12 @@ function card(r, CAN_SEND = false) {
   <div class="links">
     ${r.website ? `<a href="${esc(r.website)}" target="_blank" rel="noopener noreferrer">Their website</a>` : ''}
     ${r.instagram ? `<a href="https://instagram.com/${esc(r.instagram)}" target="_blank" rel="noopener noreferrer">Instagram</a>` : ''}
-    ${r.contact_email ? `<span class="dim">${esc(r.contact_email)}</span>` : '<span class="warn">no address on file</span>'}
+    ${r.contact_email
+      ? `<span class="dim">${esc(r.contact_email)}</span>`
+      : '<span class="warn">no address on file</span>'}
+    <button class="link" data-open="email">${r.contact_email ? 'change' : 'add an address'}</button>
   </div>
+  ${emailDrawer(r)}
 
   ${noSite
     ? '<div class="why"><b>Why:</b> they have no website at all — that is the whole opportunity.</div>'
@@ -324,6 +328,11 @@ function historyRow(r, view) {
       ${r.edited_at ? '<span class="pill">edited</span>' : ''}
     </div>
     <div class="dim sm subj">${esc(r.subject)}</div>
+    <div class="links sm">
+      ${r.contact_email ? `<span class="dim">${esc(r.contact_email)}</span>` : '<span class="warn">no address on file</span>'}
+      <button class="link" data-open="email">${r.contact_email ? 'change' : 'add an address'}</button>
+    </div>
+    ${emailDrawer(r, { open: view === 'bounced' && !r.contact_email })}
     ${view === 'skipped' && r.reason ? `<div class="why sm"><b>Reason:</b> ${esc(r.reason)}</div>` : ''}
     ${view === 'bounced' && r.send_error ? `<div class="why sm"><b>Bounce:</b> ${esc(r.send_error)}</div>` : ''}
     ${view === 'bounced' ? bouncedContact(r) : ''}
@@ -341,17 +350,34 @@ function historyRow(r, view) {
 </div>`;
 }
 
-/** On a bounced lead the address is gone. This is how a new one gets in. */
-function bouncedContact(r) {
-  if (r.contact_email) {
-    return `<div class="why sm"><b>New address:</b> ${esc(r.contact_email)} —
-      put it back in the queue to send.</div>`;
-  }
-  return `<div class="drawer open" data-drawer="email">
-    <label class="lb" for="e-${esc(r.oid)}">A corrected address, if you found one</label>
-    <input id="e-${esc(r.oid)}" data-field="email" type="email" placeholder="hello@theirdomain.com">
-    <div class="acts"><button data-act="setemail">Save address</button></div>
+/**
+ * Set or correct the address, from anywhere.
+ *
+ * Most addresses are found by hand, so this is available on every lead at any
+ * time rather than only after a bounce. It edits the business already on file —
+ * nothing is duplicated — and the address is checked against the suppression
+ * list and DNS before it is stored, so a dead one cannot be saved.
+ */
+function emailDrawer(r, { open = false } = {}) {
+  const id = esc(r.oid || r.eid);
+  return `<div class="drawer${open ? ' open' : ''}" data-drawer="email">
+    <label class="lb" for="e-${id}">${r.contact_email ? 'Correct the address' : 'Add an address'}</label>
+    <input id="e-${id}" data-field="email" type="email" value="${esc(r.contact_email || '')}"
+           placeholder="hello@theirdomain.com" autocomplete="off" spellcheck="false">
+    <div class="hint">Checked against the block list and DNS before it is saved.</div>
+    <div class="acts">
+      <button class="go" data-act="setemail">${r.contact_email ? 'Save correction' : 'Save address'}</button>
+      ${open ? '' : '<button data-act="cancel">Cancel</button>'}
+    </div>
   </div>`;
+}
+
+/** On a bounced lead, say what to do next. The editor itself is on the row. */
+function bouncedContact(r) {
+  return r.contact_email
+    ? `<div class="why sm"><b>New address:</b> ${esc(r.contact_email)} —
+       put it back in the queue to send.</div>`
+    : '<div class="why sm">No address on file. Add one below to bring this business back.</div>';
 }
 
 const STATUS_LABEL = {
@@ -572,6 +598,9 @@ try {
   button.no:hover:not(:disabled){background:color-mix(in srgb,var(--bad) 20%,transparent)}
   button:disabled{opacity:.45;cursor:default}
   .acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center}
+  button.link{background:none;border:0;padding:0;font-size:13px;color:var(--accent);
+              text-decoration:underline;text-underline-offset:2px;font-weight:500}
+  button.link:hover:not(:disabled){background:none;color:var(--p600)}
 
   .drawer{display:none;margin-top:12px}
   .drawer.open{display:block}

@@ -174,14 +174,23 @@ export function extractSignals(html, pageUrl) {
 
   // --- emails -----------------------------------------------------------
   // Three sources, because plain mailto: links miss most of them.
-  const emails = [
-    ...new Set([
-      ...[...clean.matchAll(/mailto:([^"'?\s>]+)/gi)].map((x) => decodeURIComponent(x[1]).toLowerCase()),
-      ...[...text.matchAll(/\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b/g)].map((x) => x[0].toLowerCase()),
-      ...decodeCloudflareEmails(html),
-      ...decodeObfuscated(text),
-    ]),
-  ].filter(isUsableEmail);
+  const harvest = (fragment) => {
+    const frag = strip(fragment);
+    const asText = textOf(fragment);
+    return [
+      ...[...frag.matchAll(/mailto:([^"'?\s>]+)/gi)].map((x) => decodeURIComponent(x[1]).toLowerCase()),
+      ...[...asText.matchAll(/\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b/g)].map((x) => x[0].toLowerCase()),
+      ...decodeCloudflareEmails(fragment),
+      ...decodeObfuscated(asText),
+    ];
+  };
+
+  // The footer is read first and its addresses lead the list. A footer address
+  // is nearly always the one the business wants used; the one higher up the
+  // page is as likely to be a cart, a press contact or a careers inbox. Order
+  // decides ties in pickEmail, so leading with the footer is the whole point.
+  const footerFound = harvest(footerRegion(html));
+  const emails = [...new Set([...footerFound, ...harvest(html)])].filter(isUsableEmail);
 
   // --- copyright year (staleness) ---------------------------------------
   const years = [...text.matchAll(/(?:©|&copy;|copyright)\s*(?:\d{4}\s*[-–]\s*)?(\d{4})/gi)]
@@ -228,7 +237,8 @@ export function extractSignals(html, pageUrl) {
 
     paid_apps: apps,
     socials,
-    emails: emails.slice(0, 10),
+    emails: emails.slice(0, 12),
+    footer_emails: [...new Set(footerFound)].filter(isUsableEmail).slice(0, 6),
     copyright_year: copyrightYear,
 
     text_len: text.length,
@@ -239,6 +249,32 @@ export function extractSignals(html, pageUrl) {
     links,
     contact_links: contactLinks(links, pageUrl),
   };
+}
+
+/**
+ * The footer, where a small business almost always puts its real address.
+ *
+ * A <footer> element when the site has one, plus anything in a container named
+ * like a footer, plus the tail of the document as a fallback for sites that
+ * mark up neither. Overlap is harmless — the addresses are deduplicated.
+ *
+ * This matters because a footer address is usually THE business address, while
+ * the one higher up the page is often a shopping cart, a press contact or a
+ * careers inbox.
+ */
+export function footerRegion(html) {
+  const src = String(html || '');
+  const parts = [];
+
+  for (const m of src.matchAll(/<footer\b[\s\S]{0,20000}?<\/footer\s*>/gi)) parts.push(m[0]);
+  for (const m of src.matchAll(
+    /<(?:div|section|aside)\b[^>]*(?:id|class)\s*=\s*["'][^"']*\bfoot(?:er)?\b[^"']*["'][\s\S]{0,20000}?<\/(?:div|section|aside)\s*>/gi
+  )) parts.push(m[0]);
+
+  // Nothing marked up as a footer: take the tail, which is where one would be.
+  if (!parts.length) parts.push(src.slice(Math.floor(src.length * 0.75)));
+
+  return parts.join('\n');
 }
 
 /**

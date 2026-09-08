@@ -286,6 +286,35 @@ clears the stored address, records the dead one so it is never adopted again,
 and returns the business to the pool. It leaves your roster immediately and
 comes back on its own the next time a crawl finds a *different* address.
 
+### Finding the address
+
+Most independent sites keep contact details off the homepage, so the crawler
+looks in the places they actually live:
+
+- **The footer first.** A footer address is nearly always the one the business
+  wants used; the one higher up the page is as likely to be a shopping cart, a
+  press contact or a careers inbox. Footer addresses lead the list and win ties.
+- **`mailto:` links, page text, Cloudflare-obfuscated addresses, and numeric
+  HTML entities** — writing an address as `&#105;&#110;&#102;&#111;&#64;…` is a
+  common way to hide it from scrapers while still showing it to a reader.
+- **Addresses written to defeat scrapers**, like `hello (at) brand (dot) com`.
+  Only when the page genuinely means it: a bare "at" beside a bare full stop is
+  a sentence, not an address.
+- **Up to two contact pages**, tried in order of how likely each is to pay off
+  (`/contact`, then `/about`, `/stockists`, `/imprint` and so on). This fires
+  when no address was found at all, and also when the only one found is poor —
+  a homepage offering nothing but `orders@` has not really given you a way to
+  reach anyone.
+
+Addresses are then ranked rather than filtered: a likely human first, then
+general inboxes a person actually reads, with automated senders — `checkout@`,
+`newsletter@`, `noreply@` — refused outright.
+
+**You can set or correct an address by hand at any time**, from any lead on any
+page. It edits the business already on file rather than creating a duplicate,
+and the address is checked against the block list and DNS before it is stored,
+so a dead one cannot be saved.
+
 ### Dead addresses never reach you
 
 Before a lead enters the queue, DNS is asked whether its domain can receive

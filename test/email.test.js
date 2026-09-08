@@ -94,3 +94,46 @@ test('a plausible mailbox name still decodes in the spaced form', () => {
   assert.deepEqual(decodeObfuscated('hi at brand dot com'), ['hi@brand.com']);
   assert.deepEqual(decodeObfuscated('ada at fenwickash dot co'), ['ada@fenwickash.co']);
 });
+
+// ---------------------------------------------------------------------------
+// The footer is where a small business puts the address it wants used.
+// ---------------------------------------------------------------------------
+
+test('a footer address leads the list, ahead of one higher up the page', async () => {
+  const { extractSignals } = await import('../src/extract.js');
+  const html = `<html><body>
+    <header><a href="mailto:careers@brand.com">Jobs</a></header>
+    <main><p>Order questions: orders@brand.com</p></main>
+    <footer><p>Say hello — <a href="mailto:hello@brand.com">hello@brand.com</a></p></footer>
+  </body></html>`;
+  const s = extractSignals(html, 'https://brand.com');
+
+  assert.equal(s.emails[0], 'hello@brand.com', 'the footer address must come first');
+  assert.deepEqual(s.footer_emails, ['hello@brand.com']);
+  // Everything is still collected — ordering decides ties, it does not discard.
+  assert.ok(s.emails.includes('orders@brand.com'));
+  assert.ok(s.emails.includes('careers@brand.com'));
+});
+
+test('a footer marked up with a class rather than <footer> is still read', async () => {
+  const { extractSignals } = await import('../src/extract.js');
+  const html = `<html><body>
+    <main><p>careers@brand.com</p></main>
+    <div class="site-footer"><p>hello@brand.com</p></div>
+  </body></html>`;
+  const s = extractSignals(html, 'https://brand.com');
+  assert.equal(s.emails[0], 'hello@brand.com');
+});
+
+test('a site with no marked-up footer still has its tail read', async () => {
+  const { footerRegion } = await import('../src/extract.js');
+  const body = `<html><body>${'<p>filler</p>'.repeat(200)}<p>hello@brand.com</p></body></html>`;
+  assert.match(footerRegion(body), /hello@brand\.com/);
+});
+
+test('footer addresses are still subject to every other rule', async () => {
+  const { extractSignals } = await import('../src/extract.js');
+  // An invented address in a footer is still invented.
+  const html = '<html><body><footer><p>Shipping calculated at checkout. Duties apply.</p></footer></body></html>';
+  assert.deepEqual(extractSignals(html, 'https://brand.com').emails, []);
+});

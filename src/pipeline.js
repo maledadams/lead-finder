@@ -447,12 +447,24 @@ async function processOne(env, db, ctx) {
   //
   // Only for candidates that already look worth it, so the extra fetch is
   // never spent on a business we were going to reject anyway.
-  if (!signals.emails?.length && signals.contact_links?.length && budget.canSpend('fetch')) {
-    const extra = await chaseContactPage(fetcher, signals.contact_links, res.finalUrl || url);
-    budget.spend('fetch');
+  // Chase when there is no address at all, and also when the only thing found
+  // is a poor one. A homepage offering nothing but orders@ or careers@ has not
+  // really given us a way to reach anyone, and the contact page usually carries
+  // the address the business actually wants used.
+  const onlyPoor = Boolean(signals.emails?.length)
+    && signals.emails.every((e) => WRONG_DEPARTMENT.test(e) || AUTOMATED.test(e));
+
+  if ((!signals.emails?.length || onlyPoor) && signals.contact_links?.length && budget.canSpend('fetch')) {
+    const extra = await chaseContactPage(fetcher, signals.contact_links, res.finalUrl || url, {
+      tries: 2, budget,
+    });
     stats.contact_fetched = (stats.contact_fetched || 0) + 1;
     if (extra.emails.length) {
-      signals.emails = extra.emails;
+      // Merge rather than replace: the homepage address may still be the best
+      // one, and pickEmail ranks the whole set. Footer addresses lead.
+      signals.emails = [...new Set([
+        ...(extra.footer_emails || []), ...extra.emails, ...(signals.emails || []),
+      ])];
       signals.contact_source_url = extra.url;
       stats.contact_emails_found = (stats.contact_emails_found || 0) + 1;
     }
@@ -614,15 +626,26 @@ async function processNoWebsite(env, db, { entity, budget, stats, minQueue }) {
  * Tries one page, not all of them: the second-best candidate is rarely worth
  * another fetch, and the budget is better spent on a different business.
  */
-async function chaseContactPage(fetcher, candidates, baseUrl) {
-  const target = candidates[0];
-  if (!target) return { emails: [], url: null };
+/**
+ * Fetch the likeliest contact pages until one yields an address.
+ *
+ * Only the top candidate used to be tried, so a site whose /contact page is a
+ * form and whose /about page carries the address gave up after one fetch. Each
+ * attempt costs a fetch from the budget, so the caller decides how many.
+ */
+async function chaseContactPage(fetcher, candidates, baseUrl, { tries = 2, budget = null } = {}) {
+  for (const target of (candidates || []).slice(0, tries)) {
+    if (budget && !budget.canSpend('fetch')) break;
+    const res = await fetcher.get(target);
+    if (budget) budget.spend('fetch');
+    if (!res.ok || !res.html) continue;
 
-  const res = await fetcher.get(target);
-  if (!res.ok || !res.html) return { emails: [], url: null };
-
-  const sub = extractSignals(res.html, res.finalUrl || target);
-  return { emails: sub.emails || [], url: target };
+    const sub = extractSignals(res.html, res.finalUrl || target);
+    if (sub.emails?.length) {
+      return { emails: sub.emails, footer_emails: sub.footer_emails || [], url: target };
+    }
+  }
+  return { emails: [], footer_emails: [], url: null };
 }
 
 /** Titles are usually "Brand — tagline". Keep the brand. */
