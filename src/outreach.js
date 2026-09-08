@@ -103,6 +103,8 @@ function buildBody({ env, persona, name, greeting, benefit, why, fix, closing })
     '',
     `I'm ${senderName(env)}. ${persona.context}`,
     '',
+    BUILD_APPROACH,
+    '',
     `${name} could benefit from ${lowerFirst(benefit)}.`,
     why ? '' : null,
     why ? sentence(why) : null,
@@ -116,11 +118,29 @@ function buildBody({ env, persona, name, greeting, benefit, why, fix, closing })
 }
 
 /** What to do if they want it looked at. Never a promise, never a deadline. */
-const CLOSING = [
-  'If any of that is worth doing, reply and I will take a proper look at the site and come back with what I would actually change.',
-  'And if you would rather talk it through than read about it, I am happy to jump on a short call — whenever suits you.',
-  'If it is not a priority right now, no hard feelings. I will not chase.',
-].join('\n\n');
+/**
+ * The thing that actually distinguishes the offer, so it belongs in every email
+ * of every profile rather than in one persona's copy.
+ */
+const BUILD_APPROACH = 'Everything I build is written in code rather than assembled on Shopify, Wix or a site builder, so the design is not boxed in by a template and the system can do exactly what the business needs.';
+
+/** Set with `wrangler secret put CAL_BOOKING_URL`. */
+export const bookingUrl = (env) => env?.CAL_BOOKING_URL || null;
+
+/**
+ * The close. The booking line only appears when a link is configured, so a
+ * deployment without one does not send "book a call here:" followed by nothing.
+ */
+function closing(env) {
+  const url = bookingUrl(env);
+  return [
+    'If any of that is worth doing, reply and I will take a proper look at the site and come back with what I would actually change.',
+    url
+      ? `Or if you would rather talk it through than read about it, book a 15-minute call here: ${url}`
+      : 'Or if you would rather talk it through than read about it, just say and we will find a time.',
+    'If it is not a priority right now, no hard feelings. I will not chase.',
+  ].join('\n\n');
+}
 
 /**
  * Compose a draft. Returns null when there is nothing honest to say.
@@ -163,7 +183,7 @@ export function composeDraft(entity, env) {
     benefit: benefitOf(opportunity),
     why,
     fix: fixFor(opportunity) || GENERIC_FIX,
-    closing: CLOSING,
+    closing: closing(env),
   });
 
   return {
@@ -211,7 +231,7 @@ function composeNoWebsiteDraft(entity, env, persona) {
     '',
     'That is a small build rather than a big project: a few pages, your own domain, and the things you sell.',
     '',
-    CLOSING,
+    closing(env),
     signature(env),
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');

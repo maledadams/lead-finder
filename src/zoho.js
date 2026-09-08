@@ -282,7 +282,14 @@ export function splitFooter(body) {
  */
 export function buildHtmlBody(body, signatureHtml) {
   const { message, footer } = splitFooter(body);
-  const para = (t) => escapeHtml(t).replace(/\n/g, '<br>');
+  // "book a call here: <url>" becomes "here" as the anchor. The plaintext keeps
+  // the bare URL, because a plaintext reader has no other way to reach it.
+  const para = (t) => escapeHtml(t)
+    .replace(/here:\s+(https?:\/\/[^\s<]+)/g,
+      (_, url) => `<a href="${url}" style="color:#006FEE">here</a>`)
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g,
+      (m, pre, url) => `${pre}<a href="${url}" style="color:#006FEE">${url}</a>`)
+    .replace(/\n/g, '<br>');
   return [
     '<div style="font:15px/1.65 -apple-system,BlinkMacSystemFont,\'Segoe UI\',system-ui,sans-serif;color:#1a1918">',
     `<div>${para(message)}</div>`,

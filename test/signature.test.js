@@ -233,7 +233,6 @@ test('nothing is promised and nothing is offered for free', async () => {
     assert.doesNotMatch(d.body, promise, `must not promise: ${promise}`);
   }
   assert.match(d.body, /reply and I will take a proper look/);
-  assert.match(d.body, /happy to jump on a short call/, 'the meeting offer');
 });
 
 test('every email states the problem, the cost, and the fix', async () => {
@@ -289,8 +288,61 @@ test('every draft explains the fix and offers a call', async () => {
 
     assert.match(msg, /Fixing it means /, `${opp} must explain the fix`);
     assert.ok(msg.split(/\s+/).length >= 150, `${opp} must not read as thin`);
-    assert.match(msg, /happy to jump on a short call/, `${opp} must offer a call`);
+    assert.match(msg, /book a 15-minute call here: |we will find a time/, `${opp} must offer a call`);
     assert.doesNotMatch(msg, /means [A-Z]/, 'no capital mid-sentence');
     assert.doesNotMatch(msg, /\.\s*\./, 'no doubled full stop');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The booking link
+// ---------------------------------------------------------------------------
+
+test('a configured booking link is offered as a 15-minute call', async () => {
+  const { composeDraft } = await import('../src/outreach.js');
+  const withCal = { ...env, CAL_BOOKING_URL: 'https://cal.com/someone/intro-meet' };
+  const d = composeDraft({
+    id: 'e1', display_name: 'Marlowe Pottery', contact_email: 'a@b.co', niche: 'craft_goods',
+    website_opportunity: 'orders taken manually by DM or email', personalization: '{}',
+  }, withCal);
+
+  assert.match(d.body, /book a 15-minute call here: https:\/\/cal\.com\/someone\/intro-meet/);
+});
+
+test('with no booking link configured, no dangling "here:" is sent', async () => {
+  const { composeDraft } = await import('../src/outreach.js');
+  const d = composeDraft({
+    id: 'e1', display_name: 'Marlowe Pottery', contact_email: 'a@b.co', niche: 'craft_goods',
+    website_opportunity: 'orders taken manually by DM or email', personalization: '{}',
+  }, env);
+  assert.doesNotMatch(d.body, /here:\s*$/m, 'never a label with nothing after it');
+  assert.doesNotMatch(d.body, /book a 15-minute call/);
+  assert.match(d.body, /we will find a time/);
+});
+
+test('the plaintext keeps the url, and the html turns "here" into the anchor', async () => {
+  const { composeDraft } = await import('../src/outreach.js');
+  const { buildHtmlBody } = await import('../src/zoho.js');
+  const withCal = { ...env, CAL_BOOKING_URL: 'https://cal.com/someone/intro-meet' };
+  const d = composeDraft({
+    id: 'e1', display_name: 'Marlowe Pottery', contact_email: 'a@b.co', niche: 'craft_goods',
+    website_opportunity: 'orders taken manually by DM or email', personalization: '{}',
+  }, withCal);
+
+  // A plaintext reader has no anchors, so the url must be visible to them.
+  assert.match(d.body, /https:\/\/cal\.com\/someone\/intro-meet/);
+  const html = buildHtmlBody(d.body, null);
+  assert.match(html, /<a href="https:\/\/cal\.com\/someone\/intro-meet"[^>]*>here<\/a>/);
+});
+
+test('every email names the build approach that distinguishes the offer', async () => {
+  const { composeDraft } = await import('../src/outreach.js');
+  for (const niche of ['craft_goods', 'alt_fashion', 'food_bev']) {
+    const d = composeDraft({
+      id: 'e1', display_name: 'A Shop', contact_email: 'a@b.co', niche,
+      website_opportunity: 'no meta description', personalization: '{}',
+    }, env);
+    assert.match(d.body, /written in code rather than assembled on Shopify, Wix or a site builder/);
+    assert.match(d.body, /not boxed in by a template/);
   }
 });
