@@ -182,20 +182,82 @@ test('benefitOf turns each mapped finding into something that reads as an upside
   }
 });
 
-test('benefitOf declines rather than mangling a phrase it cannot invert', async () => {
+test('benefitOf always yields something that reads after "could benefit from"', async () => {
   const { benefitOf } = await import('../src/outreach.js');
-  assert.equal(benefitOf('a booking flow for workshops'), null);
+  // "could benefit from" is the permanent phrasing now, so this must be total —
+  // a null would leave a sentence with a hole in it.
+  assert.equal(benefitOf('a booking flow for workshops'), 'a booking flow for workshops');
+  // A clause-shaped finding is nudged into a noun phrase rather than dropped.
+  assert.match(benefitOf('there is no way to book you from the site'), /^(?:some work on |way to book)/);
+  // Nothing in, nothing out.
   assert.equal(benefitOf(''), null);
   assert.equal(benefitOf(null), null);
 });
 
-test('a finding with no benefit phrasing keeps the old, grammatical sentence', async () => {
+test('every draft uses "could benefit from", whatever the finding', async () => {
   const { composeDraft } = await import('../src/outreach.js');
   const draft = composeDraft({
     id: 'e1', display_name: 'Fenwick & Ash', contact_email: 'hi@x.co', niche: 'craft_goods',
     website_opportunity: 'a booking flow for workshops',
     personalization: '{"liked":"the ash-glaze series"}',
   }, env);
-  assert.match(draft.body, /one thing stood out: a booking flow for workshops\./);
-  assert.doesNotMatch(draft.body, /could benefit from a booking flow/);
+  assert.match(draft.body, /Fenwick & Ash could benefit from a booking flow for workshops\./);
+  assert.doesNotMatch(draft.body, /one thing stood out/i, 'the old phrasing is gone for good');
+});
+
+// ---------------------------------------------------------------------------
+// The shape every email now has.
+// ---------------------------------------------------------------------------
+
+const draftFor = async (opp, extra = {}) => {
+  const { composeDraft } = await import('../src/outreach.js');
+  return composeDraft({
+    id: 'e1', display_name: 'Here We Go Again', contact_email: 'a@b.co',
+    niche: 'craft_goods', website_opportunity: opp, personalization: '{}', ...extra,
+  }, env);
+};
+
+test('the throat-clearing opener is gone from every draft', async () => {
+  for (const opp of ['orders taken manually by DM or email', 'no meta description']) {
+    const d = await draftFor(opp, { personalization: '{"liked":"the tin-glaze bowls"}' });
+    assert.doesNotMatch(d.body, /I came across/i, 'the filler opener must not return');
+    assert.doesNotMatch(d.body, /spent (?:a while|some time) on your site/i);
+    // The email opens on who is writing.
+    assert.match(d.body.split('\n')[2], /^I'm /);
+  }
+});
+
+test('nothing is promised and nothing is offered for free', async () => {
+  const d = await draftFor('orders taken manually by DM or email');
+  for (const promise of [/free/i, /no expectation/i, /send it over/i, /would you like me to/i]) {
+    assert.doesNotMatch(d.body, promise, `must not promise: ${promise}`);
+  }
+  assert.match(d.body, /reply and I will take a proper look/);
+});
+
+test('every email states the problem, the cost, and the fix', async () => {
+  const d = await draftFor('orders taken manually by DM or email');
+  assert.match(d.body, /could benefit from a proper checkout/, 'the problem, as an upside');
+  assert.match(d.body, /Every order costs you a conversation/, 'what it costs them now');
+  assert.match(d.body, /The fix is a real checkout/, 'what fixing it involves');
+});
+
+test('a compliment reads correctly whether it is singular or plural', async () => {
+  // "The tin-glaze bowls is what made me look" was the bug.
+  const plural = await draftFor('no meta description', { personalization: '{"liked":"the tin-glaze bowls"}' });
+  const singular = await draftFor('no meta description', { personalization: '{"liked":"the layered denim capsule"}' });
+  assert.match(plural.body, /I stopped on the tin-glaze bowls\./);
+  assert.match(singular.body, /I stopped on the layered denim capsule\./);
+  assert.doesNotMatch(plural.body, /bowls is what/);
+});
+
+test('a business with no website gets the same shape', async () => {
+  const { composeDraft } = await import('../src/outreach.js');
+  const d = composeDraft({
+    id: 'e1', display_name: 'Halcyon Bindery', contact_email: 'a@b.co', niche: 'craft_goods',
+    personalization: '{"no_website":true}', instagram: 'halcyon',
+  }, env);
+  assert.match(d.body, /Halcyon Bindery could benefit from a site of its own/);
+  assert.doesNotMatch(d.body, /free/i);
+  assert.match(d.body, /reply and I will take a proper look/);
 });

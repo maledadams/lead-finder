@@ -85,6 +85,47 @@ function ctaFor(persona, entity, det) {
   return persona.cta;
 }
 
+
+/**
+ * The body every draft now shares.
+ *
+ * Ordered the way a person would actually say it, and with the throat-clearing
+ * gone. "I came across your shop this week and spent some time on your site"
+ * told the reader nothing they did not know and delayed the point by a
+ * paragraph, so the email now opens on who is writing and why.
+ *
+ * Then, in order: what would help, what it is costing them now, and what
+ * fixing it involves. Naming the problem alone makes a reader defensive;
+ * naming the cost makes it real; naming the work makes it a bounded job rather
+ * than an open worry.
+ *
+ * It promises nothing. No free audit, no document to send, no deadline — an
+ * offer creates work whether or not they reply. The close simply says what to
+ * do if they want it looked at.
+ */
+function buildBody({ env, persona, name, greeting, liked, benefit, why, fix, closing }) {
+  return [
+    greeting,
+    '',
+    `I'm ${senderName(env)}. ${persona.context}`,
+    liked ? '' : null,
+    liked ? `I stopped on ${lowerFirst(liked)}.` : null,
+    '',
+    `${name} could benefit from ${lowerFirst(benefit)}.`,
+    why ? '' : null,
+    why ? sentence(why) : null,
+    fix ? '' : null,
+    fix ? `The fix is ${lowerFirst(fix)}.` : null,
+    '',
+    closing,
+    signature(env),
+    canSpamFooter(env),
+  ].filter((l) => l !== undefined && l !== null).join('\n');
+}
+
+/** What to do if they want it looked at. Never a promise, never a deadline. */
+const CLOSING = 'If that is something you would want sorted, reply and I will take a proper look. If not, no hard feelings — I will not chase.';
+
 /**
  * Compose a draft. Returns null when there is nothing honest to say.
  *
@@ -134,23 +175,14 @@ export function composeDraft(entity, env) {
   const why = consequenceOf(finding);
   const benefit = benefitOf(opportunity);
 
-  const body = [
-    greeting,
-    '',
-    `${fixCaps(persona.open(lowerFirst(p.liked)).replace('{BRAND}', name))}.`,
-    '',
-    `I'm ${senderName(env)}. ${persona.context}`,
-    '',
-    benefit
-      ? `Looking at your site, ${name} could benefit from ${lowerFirst(benefit)}.${why ? ` ${sentence(why)}` : ''}`
-      : `Looking at your site, one thing stood out: ${lowerFirst(finding)}.${why ? ` ${sentence(why)}` : ''}`,
-    '',
-    `If it would be useful, I can put together ${persona.offer} — free, and with no expectation that you work with me afterwards.`,
-    '',
-    'Would you like me to send it over this week?',
-    signature(env),
-    canSpamFooter(env),
-  ].filter((l) => l !== undefined && l !== null).join('\n');
+  const body = buildBody({
+    env, persona, name, greeting,
+    liked: p.liked,
+    benefit: benefitOf(opportunity),
+    why,
+    fix: fixFor(opportunity),
+    closing: CLOSING,
+  });
 
   return {
     subject: stripControl(persona.subject(name)).slice(0, 200),
@@ -177,23 +209,14 @@ function composeObservationDraft(entity, env, persona, opportunity) {
   const why = consequenceOf(finding);
   const benefit = benefitOf(opportunity);
 
-  const body = [
-    greeting,
-    '',
-    `I came across ${name} this week and spent some time on your site.`,
-    '',
-    `I'm ${senderName(env)}. ${persona.context}`,
-    '',
-    benefit
-      ? `${name} could benefit from ${lowerFirst(benefit)}.${why ? ` ${sentence(why)}` : ''}`
-      : `One thing stood out: ${lowerFirst(finding)}.${why ? ` ${sentence(why)}` : ''}`,
-    '',
-    `If it would be useful, I can put together ${persona.offer} — free, and with no expectation that you work with me afterwards.`,
-    '',
-    'Would you like me to send it over this week?',
-    signature(env),
-    canSpamFooter(env),
-  ].filter((l) => l !== undefined && l !== null).join('\n');
+  const body = buildBody({
+    env, persona, name, greeting,
+    liked: null,
+    benefit: benefitOf(opportunity),
+    why,
+    fix: fixFor(opportunity),
+    closing: CLOSING,
+  });
 
   return {
     subject: stripControl(`${name} — a few notes on your site`).slice(0, 200),
@@ -230,15 +253,17 @@ function composeNoWebsiteDraft(entity, env, persona) {
   const body = [
     greeting,
     '',
+    `I'm ${senderName(env)}. ${persona.context}`,
+    '',
     observation,
     '',
     point,
     '',
-    `I'm ${senderName(env)}. ${persona.context}`,
+    `${name} could benefit from a site of its own — somewhere people who already like what you do can actually buy, book or get in touch.`,
     '',
-    'If it would be useful, I can put together a rough idea of what a site could look like for you — free, and with no expectation that you work with me afterwards.',
+    'That is a small build rather than a big project: a few pages, your own domain, and the things you sell.',
     '',
-    'Would you like me to send it over this week?',
+    CLOSING,
     signature(env),
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');
@@ -382,6 +407,48 @@ export function benefitOf(rawFinding) {
   // A plainly negative phrase ("no online ordering") carries its own positive.
   const stripped = t.replace(/^(?:there is |they have |the site has )?(?:no|missing|lacks|lacking|without)\s+/i, '');
   if (stripped !== t && stripped.length > 2) return stripped;
+
+  // Last resort: the finding as written. "could benefit from" is now the
+  // permanent phrasing, so this must always return something usable. Raw
+  // findings are noun-shaped ("a booking flow for workshops"), which reads
+  // correctly; a clause-shaped one is nudged into a noun phrase rather than
+  // being dropped.
+  if (/^(?:there|it|they|this|the site|nothing)\b/i.test(t)) return `some work on ${lowerFirst(t)}`;
+  return t;
+}
+
+/**
+ * How it would actually get fixed, in one clause.
+ *
+ * The third thing an email has to say. Naming the problem tells someone
+ * something is wrong; naming the consequence tells them why it matters; this
+ * tells them it is a known, bounded job rather than a vague worry. Keyed by the
+ * same raw patterns as PLAIN_ENGLISH and BENEFIT so the three stay in step.
+ *
+ * Deliberately describes the work, never a promise about doing it.
+ */
+const FIX = [
+  [/no mobile viewport meta.*/i, 'a layout rebuild rather than a setting — bigger than a tweak, but a known quantity'],
+  [/entire web presence is a single-page link site/i, 'a small proper site — a few pages, your own domain, somewhere to actually buy'],
+  [/(\d+) images with no lazy-loading or srcset.*/i, 'serving the right image size per device, which is a build change rather than a redesign'],
+  [/images have no width\/height.*/i, 'reserving the space each image will take before it loads, so nothing shifts'],
+  [/copyright still reads (\d{4})/i, 'a five-minute change, and worth doing today whoever does it'],
+  [/almost no copy.*/i, 'a short page in your own words about how you work and why'],
+  [/no meta description/i, 'writing the sentence you want people to read in search results'],
+  [/(\w+) template with limited design control/i, 'either a custom theme or a build that is not fighting the template'],
+  [/orders taken manually by DM or email.*/i, 'a real checkout, so orders arrive as orders instead of as messages'],
+  [/sells sessions or commissions with no booking flow.*/i, 'a booking page wired to your calendar, so people can book without asking first'],
+  [/wholesale\/stockist programme with no ordering portal/i, 'a stockist login with your trade prices behind it'],
+  [/selling online with no email capture/i, 'somewhere to leave an address, and a reason to leave it'],
+  [/runs events\/pop-ups.*/i, 'a page that lists them and takes sign-ups without you doing it by hand'],
+  [/large catalogue with no reviews\/retention tooling/i, 'reviews on the product pages and something that brings buyers back'],
+];
+
+/** How the finding would be fixed, or null when there is nothing specific to say. */
+export function fixFor(rawFinding) {
+  if (!rawFinding) return null;
+  const t = String(rawFinding).trim();
+  for (const [rx, phrase] of FIX) if (rx.test(t)) return t.replace(rx, phrase);
   return null;
 }
 
@@ -413,6 +480,7 @@ const CONSEQUENCE = [
   [/phones|mobile/i, 'most people who find you are on a phone, so that is the version of your brand they actually see'],
   [/one link page/i, 'anyone who wants to buy or commission has nowhere to go once they are interested'],
   [/images load at full size|feel slow/i, 'pages that take a few seconds to appear lose a large share of visitors before they ever load'],
+  [/jumps around while the images load/i, 'people tap the wrong thing when the page moves under them, and on a phone that is most of your visitors'],
   [/footer still says/i, 'small signals like that make people wonder whether the business is still running'],
   [/nothing on the site about who you are/i, 'people buying from independent makers are buying the person as much as the product'],
   [/no description, so search results/i, 'search engines show whatever text they can scrape, which is rarely the sentence you would choose'],
