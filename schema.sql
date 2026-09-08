@@ -53,7 +53,10 @@ CREATE TABLE IF NOT EXISTS entities (
   -- fresh database without them cannot render.
   phone              TEXT,
   osm_tags           TEXT,             -- JSON
-  has_website        INTEGER           -- 1 | 0 | NULL (unknown)
+  has_website        INTEGER,          -- 1 | 0 | NULL (unknown)
+  -- Added by migration 005. Separate from score_reason on purpose: that column
+  -- holds the model's rationale and a skip note must not overwrite it.
+  skip_reason        TEXT
 );
 
 -- state is the hot filter on every queue build.
@@ -175,8 +178,13 @@ CREATE INDEX IF NOT EXISTS idx_outreach_date   ON outreach(queue_date, rank);
 CREATE INDEX IF NOT EXISTS idx_outreach_status_sent    ON outreach(status, sent_at DESC);
 CREATE INDEX IF NOT EXISTS idx_outreach_status_created ON outreach(status, created_at DESC);
 
--- One draft per entity per day. Belt and braces against double-drafting.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_outreach_unique ON outreach(entity_id, queue_date);
+-- One DRAFT per entity per day. Belt and braces against double-drafting.
+--
+-- Partial on purpose. Sent, skipped and bounced rows are records of things that
+-- happened; two of them may share a date without conflict, which is what lets
+-- an entity merge move history instead of deleting it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outreach_unique
+  ON outreach(entity_id, queue_date) WHERE status = 'DRAFT';
 
 -- ---------------------------------------------------------------------------
 -- suppressions — CAN-SPAM opt-outs and manual blocks. Checked before every

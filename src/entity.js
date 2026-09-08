@@ -219,7 +219,7 @@ async function lookupKeys(db, keys) {
  * Fold `loserId` into `winnerId`: repoint keys, move child rows, copy across
  * any field the winner is missing, delete the loser.
  */
-async function mergeEntities(db, winnerId, loserId) {
+export async function mergeEntities(db, winnerId, loserId) {
   if (winnerId === loserId) return;
 
   const winner = await db.prepare('SELECT * FROM entities WHERE id = ?').bind(winnerId).first();
@@ -263,15 +263,21 @@ async function mergeEntities(db, winnerId, loserId) {
   stmts.push(db.prepare('UPDATE entity_keys SET entity_id = ? WHERE entity_id = ?').bind(winnerId, loserId));
   stmts.push(db.prepare('UPDATE snapshots  SET entity_id = ? WHERE entity_id = ?').bind(winnerId, loserId));
   stmts.push(db.prepare('UPDATE evaluations SET entity_id = ? WHERE entity_id = ?').bind(winnerId, loserId));
-  // outreach has a unique (entity_id, queue_date); drop loser rows that would
-  // collide, then move the rest.
+  // Move the loser's outreach across. Nothing is deleted: a SENT or BOUNCED row
+  // records something that actually happened to a real person, and sent history
+  // is the one thing here that cannot be reconstructed.
+  //
+  // Since migration 005 the unique index only covers DRAFT rows, so history
+  // moves freely. OR IGNORE covers the one case still possible — both sides
+  // holding a draft for the same day — and the loser's draft is then dropped,
+  // which is safe because a draft is not a record of anything.
   stmts.push(
-    db.prepare(
-      `DELETE FROM outreach WHERE entity_id = ? AND queue_date IN
-         (SELECT queue_date FROM outreach WHERE entity_id = ?)`
-    ).bind(loserId, winnerId)
+    db.prepare('UPDATE OR IGNORE outreach SET entity_id = ? WHERE entity_id = ?')
+      .bind(winnerId, loserId)
   );
-  stmts.push(db.prepare('UPDATE outreach SET entity_id = ? WHERE entity_id = ?').bind(winnerId, loserId));
+  stmts.push(
+    db.prepare("DELETE FROM outreach WHERE entity_id = ? AND status = 'DRAFT'").bind(loserId)
+  );
   stmts.push(db.prepare('DELETE FROM entities WHERE id = ?').bind(loserId));
 
   await db.batch(stmts);

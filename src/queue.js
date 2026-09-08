@@ -148,7 +148,7 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
           `INSERT INTO outreach
              (id, entity_id, queue_date, rank, persona, subject, body, cta, status, created_at)
            VALUES (?,?,?,?,?,?,?,?, 'DRAFT', ?)
-           ON CONFLICT(entity_id, queue_date) DO NOTHING`
+           ON CONFLICT(entity_id, queue_date) WHERE status = 'DRAFT' DO NOTHING`
         ).bind(
           newId(), s.entity.id, day, i + 1,
           s.below_bar ? `${s.draft.persona}:below_bar` : s.draft.persona,
@@ -231,10 +231,12 @@ export async function markSkipped(db, outreachId, reason = 'manual-skip') {
 
   await db.batch([
     db.prepare("UPDATE outreach SET status = 'SKIPPED' WHERE id = ?").bind(outreachId),
+    // skip_reason, never score_reason. The latter is the model's explanation
+    // for the score and is the only record of why a lead rated as it did.
     db.prepare(
-      `UPDATE entities SET state = 'NURTURE', score_reason = ?, updated_at = ?
+      `UPDATE entities SET state = 'NURTURE', skip_reason = ?, updated_at = ?
        WHERE id = ? AND state = 'OUTREACH_READY'`
-    ).bind(`skipped: ${reason}`.slice(0, 200), nowIso(), row.entity_id),
+    ).bind(String(reason).slice(0, 200), nowIso(), row.entity_id),
   ]);
   return { ok: true };
 }
