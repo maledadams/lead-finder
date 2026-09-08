@@ -14,7 +14,12 @@ export function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
-export async function buildQueue(env, db, { dryRun = false } = {}) {
+export async function buildQueue(env, db, profile, { dryRun = false } = {}) {
+  // Scoped explicitly rather than from an ambient current profile: a queue
+  // built for the wrong one would put a dentist in front of a reviewer
+  // expecting ceramics, and nothing would error.
+  if (!profile?.id) throw new Error('buildQueue needs a profile');
+  const profileId = profile.id;
   const runId = newId();
   const startedAt = nowIso();
   const day = todayStr();
@@ -32,15 +37,15 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
   // dashboard's counts are true the moment it is opened.
   if (!dryRun) {
     try {
-      stats.ghosting = await sweepGhosted(db, num(env, 'GHOST_AFTER_DAYS', 30));
+      stats.ghosting = await sweepGhosted(db, profileId, num(env, 'GHOST_AFTER_DAYS', 30));
     } catch (err) {
       stats.ghosting = { error: String(err?.message || err).slice(0, 120) };
     }
   }
 
   if (!dryRun) {
-    await db.prepare('INSERT INTO runs (id, kind, started_at) VALUES (?,?,?)')
-      .bind(runId, 'queue', startedAt).run();
+    await db.prepare('INSERT INTO runs (id, profile_id, kind, started_at) VALUES (?,?,?,?)')
+      .bind(runId, profileId, 'queue', startedAt).run();
   }
 
   // Everything that has not been ruled out, not only what cleared the bar.
@@ -64,7 +69,8 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
   const { results: candidates } = await db
     .prepare(
       `SELECT e.* FROM entities e
-       WHERE e.score IS NOT NULL
+       WHERE e.profile_id = ?
+         AND e.score IS NOT NULL
          AND e.score >= ?
          AND e.state IN (${states.map(() => '?').join(',')})
          AND e.first_contacted_at IS NULL
@@ -77,7 +83,7 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
        ORDER BY e.score DESC, e.last_evaluated_at DESC
        LIMIT ?`
     )
-    .bind(floor, ...states, cooldownFrom, max * 4)
+    .bind(profileId, floor, ...states, cooldownFrom, max * 4)
     .all();
 
   stats.considered = (candidates || []).length;
@@ -107,7 +113,7 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
       continue;
     }
 
-    const draft = composeDraft(e, env);
+    const draft = composeDraft(e, env, profile);
     if (!draft) {
       // No evidence-backed compliment, or no concrete opportunity. We do not
       // invent one. This lead simply waits for better information.
@@ -148,8 +154,8 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
   // Anything already sent or skipped is left alone: that is a decision, not a
   // draft.
   await db
-    .prepare("DELETE FROM outreach WHERE queue_date = ? AND status = 'DRAFT'")
-    .bind(day)
+    .prepare("DELETE FROM outreach WHERE profile_id = ? AND queue_date = ? AND status = 'DRAFT'")
+    .bind(profileId, day)
     .run();
 
   const ts = nowIso();
@@ -158,11 +164,11 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
       selected.map((s, i) =>
         db.prepare(
           `INSERT INTO outreach
-             (id, entity_id, queue_date, rank, persona, subject, body, cta, status, created_at)
-           VALUES (?,?,?,?,?,?,?,?, 'DRAFT', ?)
+             (id, profile_id, entity_id, queue_date, rank, persona, subject, body, cta, status, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?, 'DRAFT', ?)
            ON CONFLICT(entity_id, queue_date) WHERE status = 'DRAFT' DO NOTHING`
         ).bind(
-          newId(), s.entity.id, day, i + 1,
+          newId(), profileId, s.entity.id, day, i + 1,
           s.below_bar ? `${s.draft.persona}:below_bar` : s.draft.persona,
           s.draft.subject, s.draft.body, s.draft.cta, ts
         )
@@ -185,7 +191,7 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
 
   // Turn yesterday's decisions into rules before tomorrow's leads are judged.
   try {
-    stats.learning = await deriveLessons(env, db);
+    stats.learning = await deriveLessons(env, db, profileId);
   } catch (err) {
     stats.learning = { error: String(err?.message || err).slice(0, 120) };
   }
@@ -197,7 +203,8 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
 }
 
 /** Today's queue, joined to the entity rows, for the dashboard. */
-export async function getQueue(db, day = todayStr()) {
+export async function getQueue(db, profileId, day = todayStr()) {
+  if (!profileId) throw new Error('getQueue needs a profileId');
   const { results } = await db
     .prepare(
       `SELECT o.id AS outreach_id, o.rank, o.subject, o.body, o.status, o.persona,
@@ -207,10 +214,10 @@ export async function getQueue(db, day = todayStr()) {
               e.personalization, e.state
        FROM outreach o
        JOIN entities e ON e.id = o.entity_id
-       WHERE o.queue_date = ?
+       WHERE o.profile_id = ? AND o.queue_date = ?
        ORDER BY o.rank ASC`
     )
-    .bind(day)
+    .bind(profileId, day)
     .all();
   return results || [];
 }
@@ -337,7 +344,7 @@ export async function markBounced(db, outreachId, note = 'bounced') {
  */
 export async function revive(db, outreachId) {
   const row = await db
-    .prepare('SELECT entity_id, status FROM outreach WHERE id = ?')
+    .prepare('SELECT entity_id, status, profile_id FROM outreach WHERE id = ?')
     .bind(outreachId)
     .first();
   if (!row) return { ok: false, error: 'not-found' };
@@ -345,8 +352,8 @@ export async function revive(db, outreachId) {
 
   const day = todayStr();
   const top = await db
-    .prepare('SELECT COALESCE(MAX(rank), 0) AS r FROM outreach WHERE queue_date = ?')
-    .bind(day)
+    .prepare('SELECT COALESCE(MAX(rank), 0) AS r FROM outreach WHERE profile_id = ? AND queue_date = ?')
+    .bind(row.profile_id, day)
     .first();
 
   const res = await db
@@ -423,15 +430,17 @@ export async function setResponseStatus(db, entityId, status) {
  * not a punishment — a ghosted lead is already out of the queue because it is
  * CONTACTED, and nothing here sends anything or blocks anything.
  */
-export async function sweepGhosted(db, days = 30) {
+export async function sweepGhosted(db, profileId, days = 30) {
+  if (!profileId) throw new Error('sweepGhosted needs a profileId');
   const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
   const res = await db.prepare(
     `UPDATE entities SET response_status = 'GHOSTED', updated_at = ?
-      WHERE state = 'CONTACTED'
+      WHERE profile_id = ?
+        AND state = 'CONTACTED'
         AND response_status IS NULL
         AND last_contacted_at IS NOT NULL
         AND last_contacted_at < ?`
-  ).bind(nowIso(), cutoff).run();
+  ).bind(nowIso(), profileId, cutoff).run();
 
   return { ok: true, ghosted: res?.meta?.changes || 0, after_days: days, cutoff };
 }

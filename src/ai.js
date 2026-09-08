@@ -43,7 +43,7 @@ Respond with JSON only.`;
 const SCHEMA = {
   type: 'object',
   properties: {
-    niche: { type: 'string', enum: Object.keys(NICHES) },
+    niche: { type: 'string', enum: Object.keys(NICHES) },  // replaced per profile
     fit_score: { type: 'integer' },
     creative_score: { type: 'integer' },
     need_score: { type: 'integer' },
@@ -145,19 +145,19 @@ You have very little to go on, so be careful:
  * Evaluate a business that has no website. Same contract as evaluate(), but
  * the model is given metadata instead of page content.
  */
-export async function evaluateNoWebsite(env, db, entity, tags) {
-  const learned = lessonsToPrompt(await activeLessons(db, entity.niche));
+export async function evaluateNoWebsite(env, db, entity, tags, profile = null) {
+  const learned = lessonsToPrompt(await activeLessons(db, profile?.id || entity.profile_id, entity.niche));
 
   let raw;
   try {
     const res = await env.AI.run(AI_MODEL, {
       messages: [
-        { role: 'system', content: SYSTEM + learned },
+        { role: 'system', content: (profile?.aiSystem || SYSTEM) + learned },
         { role: 'user', content: buildNoWebsitePrompt(entity, tags) },
       ],
       max_tokens: 700,
       temperature: 0.2,
-      response_format: { type: 'json_schema', json_schema: SCHEMA },
+      response_format: { type: 'json_schema', json_schema: schemaFor(profile?.niches) },
     });
     raw = res?.response ?? res;
   } catch (err) {
@@ -169,18 +169,18 @@ export async function evaluateNoWebsite(env, db, entity, tags) {
 
   // No page text means no way to verify a compliment, so drop it outright
   // rather than trusting the model to have followed the instruction.
-  const result = sanitize(parsed, { text_sample: '', has_viewport: true, img_count: 0, img_lazy: 0 });
+  const result = sanitize(parsed, { text_sample: '', has_viewport: true, img_count: 0, img_lazy: 0 }, profile?.niches || NICHES);
   if (!tags?.description) { result.liked_thing = null; result.liked_evidence = null; }
   result.no_website = true;
 
   await db
     .prepare(
-      `INSERT INTO evaluations (id, entity_id, content_hash, model, created_at, result, neurons_est)
-       VALUES (?,?,?,?,?,?,?)
+      `INSERT INTO evaluations (id, profile_id, entity_id, content_hash, model, created_at, result, neurons_est)
+       VALUES (?,?,?,?,?,?,?,?)
        ON CONFLICT(entity_id, content_hash) DO UPDATE SET
          result = excluded.result, created_at = excluded.created_at`
     )
-    .bind(newId(), entity.id, 'no-website', AI_MODEL, nowIso(), JSON.stringify(result), NEURONS_PER_EVAL)
+    .bind(newId(), profile?.id || entity.profile_id || null, entity.id, 'no-website', AI_MODEL, nowIso(), JSON.stringify(result), NEURONS_PER_EVAL)
     .run();
 
   return result;
@@ -205,21 +205,21 @@ export async function cachedEvaluation(db, entityId, contentHash) {
  * Run one evaluation. Caller is responsible for having checked the budget.
  * Returns the parsed result, or null if the model gave us nothing usable.
  */
-export async function evaluate(env, db, entity, signals, det, contentHash) {
+export async function evaluate(env, db, entity, signals, det, contentHash, profile = null) {
   // Everything the reviewers have taught us, applied to a business they have
   // never seen. This is the whole point of the feedback loop.
-  const learned = lessonsToPrompt(await activeLessons(db, entity.niche));
+  const learned = lessonsToPrompt(await activeLessons(db, profile?.id || entity.profile_id, entity.niche));
 
   let raw;
   try {
     const res = await env.AI.run(AI_MODEL, {
       messages: [
-        { role: 'system', content: SYSTEM + learned },
+        { role: 'system', content: (profile?.aiSystem || SYSTEM) + learned },
         { role: 'user', content: buildUserPrompt(entity, signals, det) },
       ],
       max_tokens: 900,
       temperature: 0.2,
-      response_format: { type: 'json_schema', json_schema: SCHEMA },
+      response_format: { type: 'json_schema', json_schema: schemaFor(profile?.niches) },
     });
     raw = res?.response ?? res;
   } catch (err) {
@@ -230,16 +230,16 @@ export async function evaluate(env, db, entity, signals, det, contentHash) {
   const parsed = coerceJson(raw);
   if (!parsed) return { error: 'unparseable-model-output' };
 
-  const result = sanitize(parsed, signals);
+  const result = sanitize(parsed, signals, profile?.niches || NICHES);
 
   await db
     .prepare(
-      `INSERT INTO evaluations (id, entity_id, content_hash, model, created_at, result, neurons_est)
-       VALUES (?,?,?,?,?,?,?)
+      `INSERT INTO evaluations (id, profile_id, entity_id, content_hash, model, created_at, result, neurons_est)
+       VALUES (?,?,?,?,?,?,?,?)
        ON CONFLICT(entity_id, content_hash) DO UPDATE SET
          result = excluded.result, created_at = excluded.created_at`
     )
-    .bind(newId(), entity.id, contentHash || null, AI_MODEL, nowIso(), JSON.stringify(result), NEURONS_PER_EVAL)
+    .bind(newId(), profile?.id || entity.profile_id || null, entity.id, contentHash || null, AI_MODEL, nowIso(), JSON.stringify(result), NEURONS_PER_EVAL)
     .run();
 
   return result;
@@ -276,9 +276,25 @@ const str = (v, max = 400) =>
  * invented anyway. A compliment whose evidence does not appear in the page
  * text is discarded rather than sent to a real person.
  */
-function sanitize(p, signals) {
+/**
+ * The schema for one profile.
+ *
+ * Only the niche enum differs, but it has to differ: offered the creative
+ * profile's categories a medium-business model would file a dental clinic under
+ * "beauty_wellness", and the value would be valid enough to store.
+ */
+function schemaFor(niches) {
+  const slugs = Object.keys(niches || {});
+  if (!slugs.length) return SCHEMA;
+  return {
+    ...SCHEMA,
+    properties: { ...SCHEMA.properties, niche: { type: 'string', enum: slugs } },
+  };
+}
+
+function sanitize(p, signals, niches = NICHES) {
   const out = {
-    niche: Object.keys(NICHES).includes(p.niche) ? p.niche : null,
+    niche: Object.keys(niches).includes(p.niche) ? p.niche : null,
     fit_score: int(p.fit_score),
     creative_score: int(p.creative_score),
     need_score: int(p.need_score),

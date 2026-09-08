@@ -25,9 +25,13 @@ import { AI_MODEL } from './config.js';
 const RERANK_FLOOR = 15;
 
 /** Record a decision. Returns the feedback row id. */
-export async function recordFeedback(db, { entityId, outreachId, decision, reason, reviewer }) {
+export async function recordFeedback(db, { entityId, outreachId, decision, reason, reviewer, profileId }) {
+  // Unattributed feedback is feedback that disappears: lessons, metrics and the
+  // ranking all read this table per profile, so a row with no profile would be
+  // written, counted nowhere, and never noticed.
+  if (!profileId) throw new Error('recordFeedback needs a profileId');
   const entity = await db
-    .prepare('SELECT score, niche FROM entities WHERE id = ?')
+    .prepare('SELECT score, niche, profile_id FROM entities WHERE id = ?')
     .bind(entityId)
     .first();
 
@@ -35,12 +39,13 @@ export async function recordFeedback(db, { entityId, outreachId, decision, reaso
   await db
     .prepare(
       `INSERT INTO feedback
-         (id, entity_id, outreach_id, decision, reason, reviewer,
+         (id, profile_id, entity_id, outreach_id, decision, reason, reviewer,
           score_at_time, niche_at_time, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?)`
     )
     .bind(
-      id, entityId, outreachId || null, decision,
+      id, profileId || entity?.profile_id || null,
+      entityId, outreachId || null, decision,
       (reason || '').slice(0, 600) || null, reviewer || null,
       entity?.score ?? null, entity?.niche ?? null, nowIso()
     )
@@ -55,7 +60,8 @@ export async function recordFeedback(db, { entityId, outreachId, decision, reaso
  * One AI call for a whole batch, not one per item — the point is to find the
  * pattern across several rejections, which is also what makes it cheap.
  */
-export async function deriveLessons(env, db, { minBatch = 3, limit = 25 } = {}) {
+export async function deriveLessons(env, db, profileId, { minBatch = 3, limit = 25 } = {}) {
+  if (!profileId) throw new Error('deriveLessons needs a profileId');
   // BOUNCED and CORRECTED are excluded on purpose. Neither is a judgement about
   // whether a lead was worth contacting. A bounce is a fact about an address,
   // and a correction is a fact about the record — "it sells tea, not skincare"
@@ -73,11 +79,12 @@ export async function deriveLessons(env, db, { minBatch = 3, limit = 25 } = {}) 
       `SELECT f.id, f.decision, f.reason, f.niche_at_time, f.score_at_time,
               e.display_name, e.website, e.website_opportunity, e.system_opportunity
        FROM feedback f JOIN entities e ON e.id = f.entity_id
-       WHERE f.applied = 0 AND f.reason IS NOT NULL AND length(f.reason) > 3
+       WHERE f.profile_id = ?
+         AND f.applied = 0 AND f.reason IS NOT NULL AND length(f.reason) > 3
          AND f.decision NOT IN ('BOUNCED','CORRECTED')
        ORDER BY f.created_at LIMIT ?`
     )
-    .bind(limit)
+    .bind(profileId, limit)
     .all();
 
   const rows = results || [];
@@ -145,7 +152,7 @@ Respond with JSON: {"lessons":[{"lesson":"...","kind":"AVOID|PREFER","niche":nul
   for (const l of lessons.slice(0, 5)) {
     const text = String(l?.lesson || '').trim().slice(0, 300);
     if (text.length < 12) continue;
-    await upsertLesson(db, text, l.kind === 'PREFER' ? 'PREFER' : 'AVOID', l.niche || null);
+    await upsertLesson(db, profileId, text, l.kind === 'PREFER' ? 'PREFER' : 'AVOID', l.niche || null);
     derived++;
   }
 
@@ -162,15 +169,16 @@ Respond with JSON: {"lessons":[{"lesson":"...","kind":"AVOID|PREFER","niche":nul
  * Store a lesson, or strengthen it if we have effectively seen it before.
  * Weight is what lets a repeated observation outrank a one-off.
  */
-async function upsertLesson(db, lesson, kind, niche) {
+async function upsertLesson(db, profileId, lesson, kind, niche) {
+  if (!profileId) throw new Error('upsertLesson needs a profileId');
   const norm = lesson.toLowerCase().replace(/[^a-z0-9 ]/g, '').slice(0, 90);
   const existing = await db
     .prepare(
       `SELECT id, weight FROM lessons
-       WHERE lower(substr(lesson,1,90)) LIKE ? AND kind = ?
+       WHERE profile_id = ? AND lower(substr(lesson,1,90)) LIKE ? AND kind = ?
        LIMIT 1`
     )
-    .bind(`${norm.slice(0, 40)}%`, kind)
+    .bind(profileId, `${norm.slice(0, 40)}%`, kind)
     .first();
 
   const ts = nowIso();
@@ -183,22 +191,23 @@ async function upsertLesson(db, lesson, kind, niche) {
   }
   await db
     .prepare(
-      `INSERT INTO lessons (id, lesson, kind, niche, weight, source_count, active, created_at, updated_at)
-       VALUES (?,?,?,?,1,1,1,?,?)`
+      `INSERT INTO lessons (id, profile_id, lesson, kind, niche, weight, source_count, active, created_at, updated_at)
+       VALUES (?,?,?,?,?,1,1,1,?,?)`
     )
-    .bind(newId(), lesson, kind, niche, ts, ts)
+    .bind(newId(), profileId, lesson, kind, niche, ts, ts)
     .run();
 }
 
 /** Active lessons, strongest first, ready to inject into a prompt. */
-export async function activeLessons(db, niche = null, limit = 12) {
+export async function activeLessons(db, profileId, niche = null, limit = 12) {
+  if (!profileId) throw new Error('activeLessons needs a profileId');
   const { results } = await db
     .prepare(
       `SELECT lesson, kind, niche, weight FROM lessons
-       WHERE active = 1 AND (niche IS NULL OR niche = ?)
+       WHERE profile_id = ? AND active = 1 AND (niche IS NULL OR niche = ?)
        ORDER BY weight DESC, updated_at DESC LIMIT ?`
     )
-    .bind(niche, limit)
+    .bind(profileId, niche, limit)
     .all();
   return results || [];
 }

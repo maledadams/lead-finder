@@ -19,12 +19,12 @@ function harness({ messages = [], labelOk = true, listOk = true } = {}) {
              ('zoho_access_token','tok','2026-01-01'),
              ('zoho_access_expires','${Date.now() + 3600_000}','2026-01-01'),
              ('zoho_refresh_token','r','2026-01-01');
-    INSERT INTO entities (id, display_name, domain, contact_email, state, first_seen_at, updated_at)
-      VALUES ('e1','Fenwick','fenwick.com','hello@fenwick.com','CONTACTED','2026-01-01','2026-01-01'),
-             ('e2','Marlowe','marlowe.com','studio@marlowe.com','CONTACTED','2026-01-01','2026-01-01');
-    INSERT INTO outreach (id, entity_id, queue_date, rank, subject, body, status, created_at, sent_at)
-      VALUES ('o1','e1','2026-01-01',1,'s','b','SENT','2026-01-01','2026-01-01T10:00:00Z'),
-             ('o2','e2','2026-01-01',2,'s','b','SENT','2026-01-01','2026-01-01T10:00:00Z');
+    INSERT INTO entities (id, profile_id, display_name, domain, contact_email, state, first_seen_at, updated_at)
+      VALUES ('e1','p-creative','Fenwick','fenwick.com','hello@fenwick.com','CONTACTED','2026-01-01','2026-01-01'),
+             ('e2','p-creative','Marlowe','marlowe.com','studio@marlowe.com','CONTACTED','2026-01-01','2026-01-01');
+    INSERT INTO outreach (id, profile_id, entity_id, queue_date, rank, subject, body, status, created_at, sent_at)
+      VALUES ('o1','p-creative','e1','2026-01-01',1,'s','b','SENT','2026-01-01','2026-01-01T10:00:00Z'),
+             ('o2','p-creative','e2','2026-01-01',2,'s','b','SENT','2026-01-01','2026-01-01T10:00:00Z');
   `);
 
   const run = (sql, args) => raw.prepare(sql).run(...args);

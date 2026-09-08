@@ -114,6 +114,7 @@ export function allKeywords() {
  * list over time instead of hammering the same few every day.
  */
 export async function nextKeywords(db, profileId, limit) {
+  if (!profileId) throw new Error('nextKeywords needs a profileId');
   const all = allKeywords();
   const { results } = await db
     .prepare('SELECT keyword, last_run_at FROM source_cursor WHERE profile_id = ?').bind(profileId)
@@ -126,6 +127,7 @@ export async function nextKeywords(db, profileId, limit) {
 }
 
 export async function recordKeywordRun(db, profileId, keyword, found) {
+  if (!profileId) throw new Error('recordKeywordRun needs a profileId');
   await db
     .prepare(
       `INSERT INTO source_cursor (profile_id, keyword, last_run_at, total_found, runs)

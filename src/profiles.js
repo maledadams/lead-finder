@@ -113,26 +113,26 @@ const SCHEMA = {
             keywords: { type: 'array', items: { type: 'string' } },
             persona_context: { type: 'string' },
             subject: { type: 'string' },
+            osm: {
+              type: 'object',
+              properties: {
+                amenity: { type: 'array', items: { type: 'string' } },
+                healthcare: { type: 'array', items: { type: 'string' } },
+                craft: { type: 'array', items: { type: 'string' } },
+                shop: { type: 'array', items: { type: 'string' } },
+                office: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['amenity', 'healthcare', 'craft', 'shop', 'office'],
+              additionalProperties: false,
+            },
           },
-          required: ['slug', 'label', 'keywords', 'persona_context', 'subject'],
+          required: ['slug', 'label', 'keywords', 'persona_context', 'subject', 'osm'],
           additionalProperties: false,
         },
       },
       seed_keywords: { type: 'array', items: { type: 'string' } },
-      osm: {
-        type: 'object',
-        properties: {
-          amenity: { type: 'array', items: { type: 'string' } },
-          healthcare: { type: 'array', items: { type: 'string' } },
-          craft: { type: 'array', items: { type: 'string' } },
-          shop: { type: 'array', items: { type: 'string' } },
-          office: { type: 'array', items: { type: 'string' } },
-        },
-        required: ['amenity', 'healthcare', 'craft', 'shop', 'office'],
-        additionalProperties: false,
-      },
     },
-    required: ['ai_system', 'niches', 'seed_keywords', 'osm'],
+    required: ['ai_system', 'niches', 'seed_keywords'],
     additionalProperties: false,
   },
 };
@@ -161,13 +161,18 @@ niches: between two and six categories these businesses fall into. For each:
                follows "I'm <name>." in the email.
   subject      an email subject line with {name} where the business name goes.
 
-seed_keywords: 20-40 search terms for finding these businesses. Concrete trade
-and specialty terms, not adjectives.
+  osm          OpenStreetMap tag values that identify THIS category on the map.
+               Real OSM values only, lower_snake_case, and an empty array for
+               any field where nothing fits. amenity (eg dentist, doctors,
+               clinic, veterinary), healthcare (eg physiotherapist, dentist,
+               podiatrist), craft (eg plumber, electrician, hvac, carpenter,
+               roofer), shop (eg car_repair, funeral_directors), office (eg
+               logistics, courier, estate_agent). These are how a business found
+               on the map is filed under this category, so do not repeat the same
+               value under two categories.
 
-osm: OpenStreetMap tag values that identify these businesses. Use real OSM
-values only, and leave an array empty when nothing fits. amenity (eg dentist,
-doctors, clinic), healthcare (eg physiotherapist, dentist), craft (eg plumber,
-electrician, hvac, carpenter), shop, office (eg logistics, courier, estate_agent).`;
+seed_keywords: 20-40 search terms for finding these businesses. Concrete trade
+and specialty terms, not adjectives.`;
 }
 
 /**
@@ -217,7 +222,20 @@ export async function createProfile(env, db, { name, brief, slug = null }) {
     const kw = (Array.isArray(n?.keywords) ? n.keywords : [])
       .map((k) => String(k).toLowerCase().trim()).filter((k) => k.length > 2);
     if (!s || !n?.label || kw.length < 5) { problems.push(`niche "${n?.slug}" is too thin`); continue; }
-    niches[s] = { label: String(n.label).slice(0, 60), keywords: [...new Set(kw)].slice(0, 60) };
+    // OSM tags live on the niche that claimed them: that is how a business
+    // found on the map is filed, so they cannot be a single flat list.
+    const osm = {};
+    for (const field of ['amenity', 'healthcare', 'craft', 'shop', 'office']) {
+      osm[field] = [...new Set((Array.isArray(n?.osm?.[field]) ? n.osm[field] : [])
+        // OSM values are lower_snake_case; anything else is invented.
+        .map((v) => String(v).toLowerCase().trim().replace(/[^a-z0-9_]/g, ''))
+        .filter(Boolean))].slice(0, 24);
+    }
+    niches[s] = {
+      label: String(n.label).slice(0, 60),
+      keywords: [...new Set(kw)].slice(0, 60),
+      osm,
+    };
     personas[s] = {
       label: String(n.label).slice(0, 60),
       context: String(n.persona_context || '').slice(0, 300),
@@ -231,14 +249,10 @@ export async function createProfile(env, db, { name, brief, slug = null }) {
   const seeds = [...new Set((Array.isArray(cfg?.seed_keywords) ? cfg.seed_keywords : [])
     .map((k) => String(k).toLowerCase().trim()).filter((k) => k.length > 2))].slice(0, 60);
 
-  const osm = {};
-  for (const field of ['amenity', 'healthcare', 'craft', 'shop', 'office']) {
-    osm[field] = [...new Set((Array.isArray(cfg?.osm?.[field]) ? cfg.osm[field] : [])
-      // OSM values are lower_snake_case; anything else is invented.
-      .map((v) => String(v).toLowerCase().trim().replace(/[^a-z0-9_]/g, ''))
-      .filter(Boolean))].slice(0, 24);
-  }
-  if (!Object.values(osm).some((a) => a.length) && !seeds.length) {
+  // Discovery has to be possible by at least one route, or the profile would be
+  // created and then quietly find nothing for days.
+  const osmTags = Object.values(niches).flatMap((n) => Object.values(n.osm).flat());
+  if (!osmTags.length && !seeds.length) {
     return { ok: false, error: 'no way to discover these businesses was produced — try a more concrete brief' };
   }
 
@@ -253,7 +267,7 @@ export async function createProfile(env, db, { name, brief, slug = null }) {
     id, wanted, cleanName, cleanBrief,
     String(cfg.ai_system || '').slice(0, 1600) || null,
     JSON.stringify(niches), JSON.stringify(personas), JSON.stringify(seeds),
-    JSON.stringify({ osm }), ts, ts
+    JSON.stringify({ osm_tags: osmTags.length }), ts, ts
   ).run();
 
   // Discovery starts from these. Seeded here rather than on first crawl so the
@@ -271,7 +285,11 @@ export async function createProfile(env, db, { name, brief, slug = null }) {
     slug: wanted,
     niches: Object.keys(niches),
     seed_keywords: seeds.length,
-    osm_tags: Object.fromEntries(Object.entries(osm).filter(([, v]) => v.length)),
+    osm_tags: Object.fromEntries(
+      Object.entries(niches).map(([slug, n]) => [
+        slug, Object.entries(n.osm).filter(([, v]) => v.length).map(([f, v]) => `${f}=${v.join('|')}`),
+      ]).filter(([, v]) => v.length)
+    ),
     warnings: problems,
   };
 }

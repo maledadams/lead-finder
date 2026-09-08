@@ -398,3 +398,15 @@ CREATE INDEX IF NOT EXISTS idx_entities_profile ON entities(profile_id, state);
 CREATE INDEX IF NOT EXISTS idx_outreach_profile ON outreach(profile_id, queue_date);
 CREATE INDEX IF NOT EXISTS idx_feedback_profile ON feedback(profile_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_lessons_profile  ON lessons(profile_id, active, weight DESC);
+
+-- The first profile, so a fresh install has somewhere to put its leads.
+--
+-- Every query in the system is scoped by profile and refuses to run without
+-- one, so a database with no profile row is a database where nothing works. Its
+-- configuration is deliberately NULL: unset falls back to the built-in creative
+-- defaults in config.js, which is what lets the original operation carry on
+-- with no stored config at all.
+INSERT OR IGNORE INTO profiles (id, slug, name, active, is_default, brief, created_at, updated_at)
+VALUES ('p-creative', 'creative', 'Creative businesses', 1, 1,
+        'Founder-led creative businesses in the United States: makers, studios, independent labels and small brands with an identity of their own.',
+        '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');

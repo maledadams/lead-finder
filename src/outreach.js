@@ -68,6 +68,27 @@ const PERSONAS = {
   },
 };
 
+/**
+ * The persona writing this email, from the profile that owns the lead.
+ *
+ * The built-in set is the creative profile's, kept as the fallback so that
+ * profile needs no stored configuration. A configured profile's personas arrive
+ * as JSON, which is why `subject` is read as a template as well as a function —
+ * JSON cannot hold a function, and a stored profile calling one would throw at
+ * the moment a draft is composed.
+ */
+function personaFor(entity, profile) {
+  const set = profile?.personas && Object.keys(profile.personas).length
+    ? profile.personas : PERSONAS;
+  return set[entity.niche] || set[Object.keys(set)[0]] || PERSONAS.lifestyle_brand;
+}
+
+function subjectFor(persona, name) {
+  if (typeof persona.subject === 'function') return persona.subject(name);
+  return String(persona.subject || '{name} — a few notes on your site')
+    .replace(/\{name\}/g, name);
+}
+
 /** CTA chosen by which opportunity is actually the strongest. */
 function ctaFor(persona, entity, det) {
   const systemLed = det?.system_need > det?.website_need;
@@ -147,8 +168,8 @@ function closing(env) {
  *
  * @returns {{subject, body, cta, persona}|null}
  */
-export function composeDraft(entity, env) {
-  const persona = PERSONAS[entity.niche] || PERSONAS.lifestyle_brand;
+export function composeDraft(entity, env, profile = null) {
+  const persona = personaFor(entity, profile);
   const p = safeJson(entity.personalization) || {};
 
   // A business with no website is a different conversation, and it does not
@@ -187,9 +208,9 @@ export function composeDraft(entity, env) {
   });
 
   return {
-    subject: stripControl(persona.subject(name)).slice(0, 200),
+    subject: stripControl(subjectFor(persona, name)).slice(0, 200),
     body,
-    cta: persona.offer,
+    cta: persona.offer || null,
     persona: entity.niche || 'lifestyle_brand',
   };
 }

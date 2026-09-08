@@ -17,11 +17,12 @@
 // address. It cannot touch the score, the state or anything that decides
 // whether a lead is contacted — a correction fixes facts, it does not promote.
 
-import { AI_MODEL, NICHES } from './config.js';
+import { AI_MODEL } from './config.js';
 import { canReceiveMail } from './mx.js';
 import { isUsableEmail } from './extract.js';
 import { recordFeedback, rerankOne } from './learning.js';
 import { nowIso } from './entity.js';
+import { profileById } from './profiles.js';
 
 
 const SCHEMA = {
@@ -41,8 +42,8 @@ const SCHEMA = {
   },
 };
 
-function buildPrompt(entity, note, pageText) {
-  const slugs = Object.keys(NICHES);
+function buildPrompt(entity, note, pageText, niches) {
+  const slugs = Object.keys(niches);
   return `A reviewer is correcting a record. Apply ONLY what their note supports.
 
 THE RECORD AS IT STANDS
@@ -80,6 +81,13 @@ export async function applyCorrection(env, db, entityId, note, { reviewer = 'das
   const entity = await db.prepare('SELECT * FROM entities WHERE id = ?').bind(entityId).first();
   if (!entity) return { ok: false, error: 'not-found' };
 
+  // The record names its own profile, so the categories offered to the model are
+  // that profile's. Reading the global list here would let a note on a dental
+  // clinic be filed under "ceramics" — a valid slug in the wrong operation.
+  const profile = entity.profile_id ? await profileById(db, entity.profile_id) : null;
+  const niches = profile?.niches || {};
+  if (!Object.keys(niches).length) return { ok: false, error: 'entity has no profile' };
+
   const snap = await db.prepare(
     'SELECT text_sample FROM snapshots WHERE entity_id = ? ORDER BY fetched_at DESC LIMIT 1'
   ).bind(entityId).first();
@@ -89,7 +97,7 @@ export async function applyCorrection(env, db, entityId, note, { reviewer = 'das
     const res = await env.AI.run(AI_MODEL, {
       messages: [
         { role: 'system', content: 'You correct business records. You are terse and you never invent facts.' },
-        { role: 'user', content: buildPrompt(entity, clean, snap?.text_sample) },
+        { role: 'user', content: buildPrompt(entity, clean, snap?.text_sample, niches) },
       ],
       max_tokens: 400,
       temperature: 0.1,
@@ -127,7 +135,7 @@ export async function applyCorrection(env, db, entityId, note, { reviewer = 'das
 
   const niche = String(parsed.niche || '').trim();
   if (!opinion && niche && niche !== entity.niche) {
-    if (NICHES[niche]) changes.niche = niche;
+    if (niches[niche]) changes.niche = niche;
     else rejected.push(`niche "${niche}" is not one of the known categories`);
   }
 
@@ -179,6 +187,7 @@ export async function applyCorrection(env, db, entityId, note, { reviewer = 'das
     decision: isCorrection ? 'CORRECTED' : 'NOTE',
     reason: isCorrection && parsed.summary ? `${clean} — applied: ${parsed.summary}` : clean,
     reviewer,
+    profileId: entity.profile_id || null,
   });
 
   // A judgement should move the score now, not at the next queue build, so the

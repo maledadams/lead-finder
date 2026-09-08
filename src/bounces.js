@@ -52,7 +52,7 @@ export async function syncBounces(env, db, { limit = 50 } = {}) {
 
   // Every address we have actually written to, and the row it belongs to.
   const { results: sent } = await db.prepare(
-    `SELECT o.id AS outreach_id, o.entity_id, LOWER(e.contact_email) AS email
+    `SELECT o.id AS outreach_id, o.entity_id, o.profile_id, LOWER(e.contact_email) AS email
      FROM outreach o JOIN entities e ON e.id = o.entity_id
      WHERE o.status = 'SENT' AND e.contact_email IS NOT NULL`
   ).all();
@@ -82,7 +82,7 @@ export async function syncBounces(env, db, { limit = 50 } = {}) {
       report.bounced++;
       await recordFeedback(db, {
         entityId: hit.entity_id, outreachId: hit.outreach_id,
-        decision: 'BOUNCED', reason: note, reviewer: 'zoho-label',
+        decision: 'BOUNCED', reason: note, reviewer: 'zoho-label', profileId: hit.profile_id,
       });
     }
     await remember(db, messageId, hit.outreach_id, res.ok ? 'bounced' : `failed: ${res.error}`);

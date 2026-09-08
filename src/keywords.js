@@ -200,15 +200,16 @@ export async function harvestOne(source, userAgent) {
  * so common retail words do not survive.
  */
 export async function mineCorpus(db, profileId, { minScore = 60, limit = 300 } = {}) {
+  if (!profileId) throw new Error('mineCorpus needs a profileId');
   const [good, bad] = await Promise.all([
     db.prepare(
       `SELECT s.text_sample FROM entities e JOIN snapshots s ON s.entity_id = e.id
-       WHERE e.score >= ? AND s.text_sample IS NOT NULL LIMIT ?`
-    ).bind(minScore, limit).all(),
+       WHERE e.profile_id = ? AND e.score >= ? AND s.text_sample IS NOT NULL LIMIT ?`
+    ).bind(profileId, minScore, limit).all(),
     db.prepare(
       `SELECT s.text_sample FROM entities e JOIN snapshots s ON s.entity_id = e.id
-       WHERE e.score < ? AND s.text_sample IS NOT NULL LIMIT ?`
-    ).bind(minScore, limit).all(),
+       WHERE e.profile_id = ? AND e.score < ? AND s.text_sample IS NOT NULL LIMIT ?`
+    ).bind(profileId, minScore, limit).all(),
   ]);
 
   const goodRows = good.results || [];
@@ -258,6 +259,7 @@ function tally(rows) {
 
 /** Insert candidates as UNVALIDATED. Existing rows are left alone. */
 export async function storeCandidates(db, profileId, candidates, source) {
+  if (!profileId) throw new Error('storeCandidates needs a profileId');
   if (!candidates.length) return 0;
   const ts = nowIso();
   let added = 0;
@@ -308,6 +310,7 @@ async function markSourceDown(db) {
  * terms that find nothing.
  */
 export async function validateBatch(db, profileId, limit, queryFn, userAgent, concurrency = 3) {
+  if (!profileId) throw new Error('validateBatch needs a profileId');
   // Back off entirely while the source is known to be down.
   //
   // The circuit breaker alone was not enough: it stops a batch after six
@@ -369,8 +372,8 @@ export async function validateBatch(db, profileId, limit, queryFn, userAgent, co
       updates.push(
         db.prepare(
           `UPDATE keywords SET status = ?, certs_seen = ?, domains_kept = ?, last_run_at = ?
-           WHERE keyword = ?`
-        ).bind(status, res.certs ?? (res.domains || []).length, kept, nowIso(), row.keyword)
+           WHERE profile_id = ? AND keyword = ?`
+        ).bind(status, res.certs ?? (res.domains || []).length, kept, nowIso(), profileId, row.keyword)
       );
     }
   }
@@ -389,43 +392,47 @@ export async function validateBatch(db, profileId, limit, queryFn, userAgent, co
  * Only applies once a keyword has had a fair number of runs.
  */
 export async function demoteUnproductive(db, profileId, { minRuns = 6 } = {}) {
+  if (!profileId) throw new Error('demoteUnproductive needs a profileId');
   const res = await db
     .prepare(
       `UPDATE keywords SET status = 'DEAD'
-       WHERE status = 'ACTIVE' AND runs >= ? AND leads_found = 0`
+       WHERE profile_id = ? AND status = 'ACTIVE' AND runs >= ? AND leads_found = 0`
     )
-    .bind(minRuns)
+    .bind(profileId, minRuns)
     .run();
   return { demoted: res.meta?.changes || 0 };
 }
 
 /** Active keywords, least recently used first. */
 export async function activeKeywords(db, profileId, limit) {
+  if (!profileId) throw new Error('activeKeywords needs a profileId');
   const { results } = await db
     .prepare(
       `SELECT keyword, niche FROM keywords
-       WHERE status = 'ACTIVE'
+       WHERE profile_id = ? AND status = 'ACTIVE'
        ORDER BY COALESCE(last_run_at, '') ASC, domains_kept DESC
        LIMIT ?`
     )
-    .bind(limit)
+    .bind(profileId, limit)
     .all();
   return results || [];
 }
 
 export async function recordUse(db, profileId, keyword, leadsFound) {
+  if (!profileId) throw new Error('recordUse needs a profileId');
   await db
     .prepare(
       `UPDATE keywords
        SET last_run_at = ?, runs = runs + 1, leads_found = leads_found + ?
-       WHERE keyword = ?`
+       WHERE profile_id = ? AND keyword = ?`
     )
-    .bind(nowIso(), leadsFound, keyword)
+    .bind(nowIso(), leadsFound, profileId, keyword)
     .run();
 }
 
 /** Harvest every configured Wikipedia source. */
 export async function harvestWikipedia(db, profileId, userAgent) {
+  if (!profileId) throw new Error('harvestWikipedia needs a profileId');
   const out = { sources: 0, terms: 0, added: 0, errors: [] };
 
   for (const source of WIKI_SOURCES) {
@@ -433,7 +440,7 @@ export async function harvestWikipedia(db, profileId, userAgent) {
     out.sources++;
     if (error) { out.errors.push(`${source.title}: ${error}`); continue; }
     out.terms += terms.length;
-    out.added += await storeCandidates(db, terms, `wikipedia:${source.title}`);
+    out.added += await storeCandidates(db, profileId, terms, `wikipedia:${source.title}`);
   }
   return out;
 }

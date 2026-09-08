@@ -33,6 +33,7 @@ import { normalizeDomain, normalizeUrl, nowIso, resolveEntity } from './entity.j
  * rather than silently dropped.
  */
 export async function ingestSeeds(db, profileId, seeds, source = 'seed') {
+  if (!profileId) throw new Error('ingestSeeds needs a profileId');
   const out = { accepted: 0, duplicates: 0, rejected: [], entities: [] };
 
   for (const raw of seeds) {
@@ -40,7 +41,7 @@ export async function ingestSeeds(db, profileId, seeds, source = 'seed') {
     if (!seed) { out.rejected.push(String(raw).slice(0, 120)); continue; }
 
     seed.discovery_source = seed.discovery_source || source;
-    const res = await resolveEntity(db, seed);
+    const res = await resolveEntity(db, profileId, seed);
     if (!res.id) { out.rejected.push(String(raw).slice(0, 120)); continue; }
 
     if (res.created) out.accepted++;
@@ -48,7 +49,9 @@ export async function ingestSeeds(db, profileId, seeds, source = 'seed') {
     out.entities.push({ id: res.id, created: res.created, merged: res.merged });
 
     const url = seed.website ? normalizeUrl(seed.website) : null;
-    if (url) await addToFrontier(db, [{ url, depth: 0, priority: 100, reason: source }], res.id);
+    if (url) {
+      await addToFrontier(db, profileId, [{ url, depth: 0, priority: 100, reason: source }], res.id);
+    }
   }
 
   return out;
@@ -77,6 +80,7 @@ export function parseSeedString(line) {
  * we already know about.
  */
 export async function addToFrontier(db, profileId, candidates, parentEntityId = null) {
+  if (!profileId) throw new Error('addToFrontier needs a profileId');
   if (!candidates.length) return 0;
 
   const byDomain = new Map();
@@ -97,6 +101,11 @@ export async function addToFrontier(db, profileId, candidates, parentEntityId = 
   // have actually crawled before. Merely *knowing* a business is not a reason
   // to skip it — a freshly seeded entity has never been fetched, and that is
   // exactly what the frontier is for.
+  //
+  // The first of these two is deliberately NOT scoped to the profile. Dedup is
+  // global — a business belongs to whichever profile discovered it first — so a
+  // domain another profile has already crawled can never become a lead here,
+  // and fetching it again would spend this profile's budget to rediscover that.
   const [crawled, queued] = await Promise.all([
     db.prepare(
       `SELECT domain FROM entities
@@ -184,6 +193,7 @@ export function selectPeerLinks(signals, sourceUrl, depth) {
 
 /** Pull the next batch of pending frontier URLs, highest priority first. */
 export async function takeFrontierBatch(db, profileId, limit) {
+  if (!profileId) throw new Error('takeFrontierBatch needs a profileId');
   const { results } = await db
     .prepare(
       `SELECT url, domain, depth, parent_entity, reason FROM crawl_frontier
@@ -197,6 +207,7 @@ export async function takeFrontierBatch(db, profileId, limit) {
 }
 
 export async function markFrontier(db, profileId, url, status) {
+  if (!profileId) throw new Error('markFrontier needs a profileId');
   await db
     .prepare('UPDATE crawl_frontier SET status = ?, processed_at = ? WHERE profile_id = ? AND url = ?')
     .bind(status, nowIso(), profileId, url)
@@ -208,6 +219,7 @@ export async function markFrontier(db, profileId, url, status) {
  * or the score sat just under the bar and might have moved.
  */
 export async function staleEntities(db, profileId, { days, nearMissFrom, nearMissTo, limit }) {
+  if (!profileId) throw new Error('staleEntities needs a profileId');
   const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
   const { results } = await db
     .prepare(

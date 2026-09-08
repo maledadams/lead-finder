@@ -35,8 +35,10 @@ that gets better at picking leads the more you tell it why you skipped one.
 - [How it works](#how-it-works)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
+- [Profiles: several outreach operations, one deployment](#profiles-several-outreach-operations-one-deployment)
 - [Making it yours](#making-it-yours-the-part-that-is-not-configuration)
 - [The review dashboard](#the-review-dashboard)
+- [The calendar](#the-calendar)
 - [Metrics](#metrics)
 - [What it costs to run](#what-it-costs-to-run)
 - [Legal: CAN-SPAM and crawling](#legal-can-spam-and-crawling)
@@ -216,31 +218,85 @@ Everything below is set in `wrangler.toml` and needs no code change.
 | `REQUIRE_ACCESS` | `true` | Refuse anything that did not arrive through Cloudflare Access |
 | `MAIL_FORMAT` | `html` | `html` renders your signature; `plaintext` flattens it |
 | `ZOHO_BOUNCE_LABEL` | `bounce` | The mailbox label carrying delivery failure notices |
+| `CAL_BOOKING_URL` | — | Your Cal.com booking link. Unset, emails invite a reply instead |
+| `CAL_API_KEY` | — | Read-only Cal.com key, so the dashboard can show what is booked |
+
+Per-profile overrides exist for the four budget lines, so one operation can be
+given a larger share than another without changing the deployment default.
+
+## Profiles: several outreach operations, one deployment
+
+A profile is a complete outreach operation: who you are looking for, how they
+are categorised, what the emails say, what the scoring brief is, and where to
+look. Switching profile is switching account — the leads, the drafts, the
+replies, the lessons, the keywords, the crawl frontier, the spend and every
+metric belong to exactly one profile and are never mixed.
+
+Add one from the sidebar, in a sentence, with no code:
+
+> Medium-sized clinics and private practices in the United States: dental,
+> physiotherapy, chiropractic, optometry. Established practices with several
+> staff, not sole traders.
+
+A model turns that into the categories, the classification vocabulary, the
+scoring brief, the email copy, the search terms and the OpenStreetMap tags —
+and every part of it is validated before the profile exists, because a profile
+with an invented map tag would fail silently at crawl time days later.
+
+Or `POST /api/profiles` with `{ "name": "...", "brief": "..." }`.
+
+### What profiles share, and why
+
+Four things are shared deliberately. Splitting any of them would be a mistake,
+not a feature.
+
+| Shared | Why |
+|---|---|
+| **Deduplication** | A business belongs to whichever profile discovered it first, and every other profile skips it. Otherwise one person receives two different pitches from the same sender — the worst thing this system could do to a sending reputation. |
+| **The daily send cap** | One mailbox has one reputation. Two profiles sending thirty each is sixty cold emails a day from one address. |
+| **The booking calendar** | One person has one diary. |
+| **Suppressions** | An opt-out is a person's wish, not a profile's preference. |
+
+Everything else is separate, and the test suite asserts it rather than claiming
+it: `test/isolation.test.js` gives both profiles data at once and checks that
+each page shows one profile's rows and none of the other's.
+
+### Discovery does not collide
+
+Two profiles hunting the same cities would race for the same businesses, and
+since the first finder owns one, the loser would spend its budget rediscovering
+leads it cannot have. So a profile brings its own metro list and its own map
+tags. The two profiles that ship have no city in common.
 
 ## Making it yours: the part that is not configuration
 
-The machinery is business-agnostic. The **taste** is not, and it lives in seven
-places that have to be rewritten rather than set. This is the real work of
-adopting this project, and it is a few hours, not a few minutes.
+Most of what used to be a code change is now a profile — see above. The
+built-in creative profile is what a deployment with no profile configuration
+falls back to, and these are the files that define it.
 
-| File | What to replace |
+| File | What it defines |
 |---|---|
-| `src/config.js` → `NICHES` | The taxonomy of business types you sell to |
-| `src/outreach.js` → `PERSONAS` | The actual sales copy per niche: opener, what you do, what you offer |
+| `src/config.js` → `NICHES` | The fallback taxonomy of business types |
+| `src/outreach.js` → `PERSONAS` | The fallback sales copy per category |
 | `src/outreach.js` → `PLAIN_ENGLISH` | How a technical finding is said to a non-technical reader |
 | `src/outreach.js` → `BENEFIT` | The same finding said as the upside it implies |
-| `src/ai.js` → `SYSTEM` | The brief the model scores against: who you want, who you do not, what disqualifies a lead outright |
-| `src/score.js` | Deterministic weights and hard vetoes |
-| `src/keywords.js` | The bootstrap keyword list discovery starts from |
-| `src/osm.js` | The metro list, if you sell locally |
+| `src/outreach.js` → `FIX` | What fixing each kind of problem actually involves |
+| `src/ai.js` → `SYSTEM` | The fallback scoring brief |
+| `src/score.js` | Deterministic weights and hard vetoes — shared by every profile |
+| `src/osm.js` → `METROS` | The fallback metro list |
+
+The three sentences every email carries whatever the profile — what you build,
+how you build it, and the booking link — live in `src/outreach.js` as
+`BUILD_APPROACH` and `closing()`.
 
 Everything else — the crawl budget, the dedup index, the queue, the dashboard,
 the metrics, the send path, bounce handling — works unchanged.
 
 ## The review dashboard
 
-Five pages, server-rendered, no build step, roughly 7 KB gzipped with zero
-external requests.
+Seven pages, server-rendered, no build step, with zero external requests. The
+profile switcher is at the top of the sidebar; every page below it shows that
+profile and nothing else.
 
 - **Today** — the day's queue. Each card shows the business, why it was
   surfaced, and the full draft. Send, edit, or skip with a reason.
@@ -249,6 +305,7 @@ external requests.
 - **Skipped** — what you passed on and the reason you gave. Any of them can be
   edited and put back in the queue.
 - **Bounced** — dead addresses. Enter a corrected one and requeue.
+- **Calendar** — what is booked, across every profile. See below.
 - **Metrics** — see below.
 
 ### Bounces are detected automatically
@@ -337,6 +394,18 @@ Every skip asks for a reason, and those reasons are periodically distilled into
 rules that outrank the model's own judgement on future leads. A fresh install
 has no rules and will surface things you do not want for the first week or two.
 That is expected. Skip them with real reasons and it converges.
+
+## The calendar
+
+Every draft ends with the same 15-minute booking link, so the Calendar page
+shows what came of it: who booked, when, and the join link, in the reader's own
+timezone. It is the one page that is not per profile, because one person has one
+diary.
+
+Read-only by design. Cal.com already has a good interface for moving a call, and
+a second one here would only be somewhere else to get it wrong. Set
+`CAL_BOOKING_URL` for the link in the emails and `CAL_API_KEY` for the page; with
+neither set, the emails invite a reply and the page says so.
 
 ## Metrics
 

@@ -5,7 +5,6 @@
 // predict a reply, and which niches are worth the crawl budget. A metric that
 // cannot change a decision is not here.
 
-import { NICHES } from './config.js';
 import { barsH, columns, donut, funnel, noData, pctLabel, stat, table } from './charts.js';
 
 export const PERIODS = { day: 'Today', month: 'This month', year: 'This year', all: 'All time' };
@@ -25,7 +24,12 @@ export function bounds(period, now = new Date()) {
   return { from: '0000-01-01', label: 'all time', bucket: 'month' };
 }
 
-export async function renderMetrics(db, env, { period = 'month' } = {}) {
+export async function renderMetrics(db, env, { period = 'month', profile } = {}) {
+  // Nothing on this page may mix profiles: the whole point of switching is that
+  // the numbers change. A missing profile fails rather than silently totalling
+  // both operations together.
+  if (!profile?.id) throw new Error('renderMetrics needs a profile');
+  const pid = profile.id;
   const { from, label, bucket } = bounds(period);
 
   // Bucketing happens in SQLite rather than in JS: it keeps the rows returned
@@ -44,17 +48,17 @@ export async function renderMetrics(db, env, { period = 'month' } = {}) {
          SUM(CASE WHEN e.response_status IS NULL      THEN 1 ELSE 0 END) AS awaiting,
          COUNT(*) AS sent
        FROM outreach o JOIN entities e ON e.id = o.entity_id
-       WHERE o.status = 'SENT' AND substr(o.sent_at,1,10) >= ?`
-    ).bind(from).first(),
+       WHERE o.profile_id = ? AND o.status = 'SENT' AND substr(o.sent_at,1,10) >= ?`
+    ).bind(pid, from).first(),
 
     db.prepare(
       `SELECT ${bucketExpr} AS label,
               SUM(CASE WHEN o.status = 'SENT' THEN 1 ELSE 0 END) AS sent,
               SUM(CASE WHEN o.status = 'BOUNCED' THEN 1 ELSE 0 END) AS bounced
        FROM outreach o
-       WHERE o.sent_at IS NOT NULL AND substr(o.sent_at,1,10) >= ?
+       WHERE o.profile_id = ? AND o.sent_at IS NOT NULL AND substr(o.sent_at,1,10) >= ?
        GROUP BY label ORDER BY label`
-    ).bind(from).all(),
+    ).bind(pid, from).all(),
 
     // The whole funnel, all time — a funnel scoped to a day is meaningless
     // because the stages are reached weeks apart.
@@ -66,16 +70,16 @@ export async function renderMetrics(db, env, { period = 'month' } = {}) {
          SUM(CASE WHEN state IN ('CONTACTED','REPLIED','CONVERSATION','CLIENT') THEN 1 ELSE 0 END) AS contacted,
          SUM(CASE WHEN state IN ('REPLIED','CONVERSATION','CLIENT') THEN 1 ELSE 0 END) AS replied,
          SUM(CASE WHEN state = 'CLIENT' THEN 1 ELSE 0 END) AS client
-       FROM entities`
-    ).first(),
+       FROM entities WHERE profile_id = ?`
+    ).bind(pid).first(),
 
     db.prepare(
       `SELECT e.niche AS niche, COUNT(*) AS sent,
               SUM(CASE WHEN e.response_status = 'REPLIED' THEN 1 ELSE 0 END) AS replied
        FROM outreach o JOIN entities e ON e.id = o.entity_id
-       WHERE o.status = 'SENT' AND substr(o.sent_at,1,10) >= ?
+       WHERE o.profile_id = ? AND o.status = 'SENT' AND substr(o.sent_at,1,10) >= ?
        GROUP BY e.niche HAVING sent > 0 ORDER BY sent DESC LIMIT 8`
-    ).bind(from).all(),
+    ).bind(pid, from).all(),
 
     // Does the score predict a reply? If it does not, the scoring is decoration.
     db.prepare(
@@ -88,20 +92,22 @@ export async function renderMetrics(db, env, { period = 'month' } = {}) {
               COUNT(*) AS sent,
               SUM(CASE WHEN e.response_status = 'REPLIED' THEN 1 ELSE 0 END) AS replied
        FROM outreach o JOIN entities e ON e.id = o.entity_id
-       WHERE o.status = 'SENT' AND e.score IS NOT NULL AND substr(o.sent_at,1,10) >= ?
+       WHERE o.profile_id = ? AND o.status = 'SENT' AND e.score IS NOT NULL
+         AND substr(o.sent_at,1,10) >= ?
        GROUP BY band`
-    ).bind(from).all(),
+    ).bind(pid, from).all(),
 
     db.prepare(
-      `SELECT metric, SUM(used) AS used FROM budget WHERE day >= ? GROUP BY metric ORDER BY used DESC`
-    ).bind(from).all(),
+      `SELECT metric, SUM(used) AS used FROM budget
+       WHERE profile_id = ? AND day >= ? GROUP BY metric ORDER BY used DESC`
+    ).bind(pid, from).all(),
 
     db.prepare(
       `SELECT f.reason AS reason, COUNT(*) AS n FROM feedback f
-       WHERE f.decision IN ('SKIPPED','BLOCKED') AND f.reason IS NOT NULL
-         AND substr(f.created_at,1,10) >= ?
+       WHERE f.profile_id = ? AND f.decision IN ('SKIPPED','BLOCKED')
+         AND f.reason IS NOT NULL AND substr(f.created_at,1,10) >= ?
        GROUP BY f.reason ORDER BY n DESC LIMIT 6`
-    ).bind(from).all(),
+    ).bind(pid, from).all(),
   ]);
 
   const o = outcome || {};
@@ -114,7 +120,7 @@ export async function renderMetrics(db, env, { period = 'month' } = {}) {
   const aiSpend = spendRows.reduce((a, r) => a + (Number(r.used) || 0), 0);
 
   const nicheRows = (byNiche.results || []).map((r) => ({
-    label: NICHES[r.niche]?.label || r.niche || 'unknown',
+    label: profile.niches?.[r.niche]?.label || r.niche || 'unknown',
     value: pctOf(r.replied, r.sent),
     display: `${pctLabel(r.replied, r.sent)}`,
     sent: r.sent, replied: r.replied,

@@ -19,8 +19,8 @@
 // `default-src 'none'` with no font-src, and loosening that on a page which
 // renders text scraped from strangers' websites is a bad trade for a typeface.
 
-import { NICHES } from './config.js';
 import { renderMetrics } from './metrics.js';
+import { bookingUrl } from './outreach.js';
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -34,37 +34,140 @@ const TITLES = {
   skipped: 'Skipped',
   bounced: 'Bounced',
   metrics: 'Metrics',
+  calendar: 'Calendar',
 };
+
+/**
+ * The rail icons.
+ *
+ * Inlined rather than pulled from an icon package, which is not a compromise
+ * here: the CSP is `default-src 'none'` with no host allowed, so a CDN icon
+ * font or sprite sheet cannot load at all, and shipping a dependency to render
+ * six 24px glyphs would be heavier than the glyphs. Drawn in the Phosphor
+ * manner — 24px box, single stroke weight, round caps — so they read as one set.
+ */
+const ICONS = {
+  today: '<rect x="3.5" y="3.5" width="17" height="17" rx="4.5"/><path d="M8.2 12.4l2.9 2.9 4.7-5.9"/>',
+  sent: '<path d="M20.6 3.4 3.4 9.9l7.1 3.6 3.6 7.1z"/><path d="M10.5 13.5 20.6 3.4"/>',
+  skipped: '<circle cx="12" cy="12" r="8.5"/><path d="M6.4 17.6 17.6 6.4"/>',
+  bounced: '<path d="M8.2 3.6 3.4 8.4l4.8 4.8"/><path d="M3.4 8.4h11.2a5.9 5.9 0 0 1 5.9 5.9v6.1"/>',
+  metrics: '<path d="M4 20h16"/><path d="M7.6 20v-7.4"/><path d="M12 20V6.6"/><path d="M16.4 20v-4.6"/>',
+  calendar: '<rect x="3.5" y="5.8" width="17" height="14.7" rx="3.2"/><path d="M8.2 3v4M15.8 3v4M3.5 10.6h17"/>',
+  glass: '<circle cx="10.8" cy="10.8" r="6.9"/><path d="M15.9 15.9 21 21"/>',
+};
+
+const icon = (name) =>
+  `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"`
+  + ` stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
 export async function renderDashboard(db, env, opts = {}) {
   const {
     view = 'today', nonce = '', signedInAs = null, sending = null,
-    day, page = 1, q = '', from = null, to = null,
+    day, page = 1, q = '', from = null, to = null, profile, profiles = [],
   } = opts;
+  // Every count and every row below is scoped to this. Switching profile has to
+  // change the numbers, so a missing one fails instead of totalling both.
+  if (!profile?.id) throw new Error('renderDashboard needs a profile');
+  const pid = profile.id;
 
   const counts = await db.prepare(
     `SELECT
-       (SELECT COUNT(*) FROM outreach WHERE queue_date = ? AND status = 'DRAFT') AS todo,
-       (SELECT COUNT(*) FROM outreach WHERE status = 'SENT')                     AS sent,
-       (SELECT COUNT(*) FROM outreach WHERE status = 'SKIPPED')                  AS skipped,
-       (SELECT COUNT(*) FROM outreach WHERE status = 'BOUNCED')                  AS bounced,
-       (SELECT COUNT(*) FROM entities WHERE state = 'CONTACTED')                 AS contacted`
-  ).bind(day).first() || {};
+       (SELECT COUNT(*) FROM outreach WHERE profile_id = ?1 AND queue_date = ?2 AND status = 'DRAFT') AS todo,
+       (SELECT COUNT(*) FROM outreach WHERE profile_id = ?1 AND status = 'SENT')    AS sent,
+       (SELECT COUNT(*) FROM outreach WHERE profile_id = ?1 AND status = 'SKIPPED') AS skipped,
+       (SELECT COUNT(*) FROM outreach WHERE profile_id = ?1 AND status = 'BOUNCED') AS bounced,
+       (SELECT COUNT(*) FROM entities WHERE profile_id = ?1 AND state = 'CONTACTED') AS contacted`
+  ).bind(pid, day).first() || {};
 
-  const body = view === 'today'
-    ? await todayView(db, day, sending)
-    : view === 'metrics'
-      ? await renderMetrics(db, env, { period: opts.period || 'month' })
-      : await historyView(db, view, { page, q, from, to });
+  const body = view === 'calendar'
+    ? calendarView(opts.calendar, env)
+    : view === 'today'
+      ? await todayView(db, pid, day, sending, profile)
+      : view === 'metrics'
+        ? await renderMetrics(db, env, { period: opts.period || 'month', profile })
+        : await historyView(db, pid, view, { page, q, from, to }, profile);
 
-  return shell({ view, nonce, signedInAs, sending, counts, body });
+  return shell({ view, nonce, signedInAs, sending, counts, body, profile, profiles, env });
+}
+
+// ---------------------------------------------------------------------------
+// Calendar — the one thing both profiles share.
+//
+// Every email in every profile ends with the same 15-minute booking link,
+// because one person has one diary. So this page is not scoped: it shows what is
+// booked, whoever wrote to them, and says so rather than leaving it ambiguous.
+//
+// Read-only on purpose. Cal.com already has a good interface for moving a call;
+// duplicating it here would only give two places to get it wrong.
+// ---------------------------------------------------------------------------
+
+function calendarView(cal, env) {
+  const link = bookingUrl(env);
+  const head = `
+<div class="head"><h1>Upcoming calls</h1></div>
+<p class="cap">Shared by every profile — one diary, one booking link. ${
+  link ? `Recipients book at <a href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(link.replace(/^https?:\/\//, ''))}</a>.`
+       : 'No booking link is configured, so the emails invite a reply instead.'}</p>`;
+
+  if (!cal || (!cal.ok && cal.error === 'not-configured')) {
+    return `${head}
+<div class="empty"><b>Cal.com is not connected.</b><br>
+Set the key once and this fills in:<br>
+<code>wrangler secret put CAL_API_KEY</code></div>`;
+  }
+  if (!cal.ok) {
+    return `${head}
+<div class="empty"><b>Cal.com did not answer.</b><br>${esc(cal.error)}<br>
+Nothing is wrong with the leads — this page is the only thing affected.</div>`;
+  }
+
+  const bookings = cal.bookings || [];
+  if (!bookings.length) {
+    return `${head}
+<div class="empty"><b>Nothing booked yet.</b><br>
+Every draft offers the call, so this fills up from the replies rather than from here.</div>`;
+  }
+
+  // Grouped by day, because "what is on Thursday" is the actual question. The
+  // dates are formatted in UTC here and rewritten to the reader's own timezone
+  // by the script at the bottom of the page — a Worker has no idea where the
+  // person reading it is, and a call an hour out is worse than useless.
+  const byDay = new Map();
+  for (const b of bookings) {
+    const day = String(b.start).slice(0, 10);
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day).push(b);
+  }
+
+  const sections = [...byDay.entries()].map(([day, items]) => `
+<h2><time class="d" datetime="${esc(day)}">${esc(day)}</time></h2>
+<div class="rows">
+${items.map((b) => `
+  <div class="row">
+    <div class="rmain">
+      <h3>${esc(b.name || b.title || 'Call')}</h3>
+      <div class="dim sub">${esc(b.title || '')}${
+        b.email ? ` &middot; <span class="mono">${esc(b.email)}</span>` : ''}</div>
+      ${b.location && /^https?:/.test(b.location)
+        ? `<div class="links"><a href="${esc(b.location)}" target="_blank" rel="noopener noreferrer">Join the call</a></div>`
+        : ''}
+    </div>
+    <div class="rmeta">
+      <div class="when"><time class="t" datetime="${esc(b.start)}">${esc(String(b.start).slice(11, 16))} UTC</time></div>
+      ${b.status && b.status !== 'accepted'
+        ? `<span class="pill weak">${esc(b.status)}</span>` : ''}
+    </div>
+  </div>`).join('')}
+</div>`).join('');
+
+  return head + sections;
 }
 
 // ---------------------------------------------------------------------------
 // Today — the work itself.
 // ---------------------------------------------------------------------------
 
-async function todayView(db, day, sending) {
+async function todayView(db, pid, day, sending, profile) {
   const [queue, lessons, recent] = await Promise.all([
     db.prepare(
       `SELECT o.id AS oid, o.rank, o.subject, o.body, o.status, o.persona, o.edited_at,
@@ -73,14 +176,18 @@ async function todayView(db, day, sending) {
               e.website_opportunity, e.system_opportunity, e.power_signals,
               e.personalization, e.has_website
        FROM outreach o JOIN entities e ON e.id = o.entity_id
-       WHERE o.queue_date = ? ORDER BY o.rank ASC`
-    ).bind(day).all(),
-    db.prepare('SELECT lesson, kind, weight FROM lessons WHERE active = 1 ORDER BY weight DESC LIMIT 6').all(),
+       WHERE o.profile_id = ? AND o.queue_date = ? ORDER BY o.rank ASC`
+    ).bind(pid, day).all(),
+    db.prepare(
+      `SELECT lesson, kind, weight FROM lessons
+       WHERE profile_id = ? AND active = 1 ORDER BY weight DESC LIMIT 6`
+    ).bind(pid).all(),
     db.prepare(
       `SELECT f.decision, f.reason, e.display_name FROM feedback f
        JOIN entities e ON e.id = f.entity_id
-       WHERE f.reason IS NOT NULL ORDER BY f.created_at DESC LIMIT 4`
-    ).all(),
+       WHERE f.profile_id = ? AND f.reason IS NOT NULL
+       ORDER BY f.created_at DESC LIMIT 4`
+    ).bind(pid).all(),
   ]);
 
   const canSend = Boolean(sending?.connected);
@@ -101,12 +208,12 @@ async function todayView(db, day, sending) {
     : '<span class="warn">sending not connected — copy &amp; paste</span>'}
 </div>
 
-${todo.length ? todo.map((r) => card(r, canSend)).join('') : `<div class="empty">
+${todo.length ? todo.map((r) => card(r, canSend, profile)).join('') : `<div class="empty">
   <b>Nothing to review right now.</b><br>
   New leads are found overnight and appear here each morning.
 </div>`}
 
-${done.length ? `<h2>Already handled today</h2>${done.map((r) => card(r, canSend)).join('')}` : ''}
+${done.length ? `<h2>Already handled today</h2>${done.map((r) => card(r, canSend, profile)).join('')}` : ''}
 
 ${(lessons.results || []).length ? `<h2>What this has learned from you</h2>
 <div class="panel"><ul class="lessons">
@@ -122,10 +229,10 @@ ${(recent.results || []).length ? `<h2>Recent notes</h2>
 `;
 }
 
-function card(r, CAN_SEND = false) {
+function card(r, CAN_SEND = false, profile = null) {
   const p = safe(r.personalization) || {};
   const power = safe(r.power_signals) || [];
-  const niche = NICHES[r.niche]?.label || 'Creative business';
+  const niche = profile?.niches?.[r.niche]?.label || r.niche || 'Business';
   const belowBar = String(r.persona || '').includes('below_bar');
   const noSite = r.has_website === 0;
   const isDone = r.status !== 'DRAFT';
@@ -239,7 +346,7 @@ function bounceDrawer() {
 // Sent / Skipped / Bounced — the record.
 // ---------------------------------------------------------------------------
 
-async function historyView(db, view, { page, q, from, to }) {
+async function historyView(db, pid, view, { page, q, from, to }, profile) {
   const status = view.toUpperCase();
 
   // Each page is ordered and filtered by the date that actually means
@@ -252,8 +359,8 @@ async function historyView(db, view, { page, q, from, to }) {
     : status === 'BOUNCED' ? 'o.bounced_at'
       : 'o.created_at';
 
-  const where = ['o.status = ?'];
-  const args = [status];
+  const where = ['o.profile_id = ?', 'o.status = ?'];
+  const args = [pid, status];
   if (q) {
     where.push('(e.display_name LIKE ? OR o.subject LIKE ?)');
     args.push(`%${q}%`, `%${q}%`);
@@ -477,10 +584,17 @@ function pager(current, pages) {
  * Light is the default. Dark is a deliberate choice, remembered per browser,
  * not a reflection of the OS setting.
  */
-function shell({ view, nonce, signedInAs, sending, counts, body }) {
+function shell({ view, nonce, signedInAs, sending, counts, body, profile, profiles }) {
+  // Every link carries the profile, so a middle-click into a new tab lands in
+  // the same operation rather than in whichever one is default.
+  const qs = `?profile=${encodeURIComponent(profile.slug)}`;
   const item = (href, key, label, n) =>
-    `<a class="nav" href="${href}"${view === key ? ' aria-current="page"' : ''}>${esc(label)}${
-      n ? `<span class="n">${n}</span>` : ''}</a>`;
+    `<a class="nav" href="${href}${qs}"${view === key ? ' aria-current="page"' : ''}>${
+      icon(key)}<span>${esc(label)}</span>${n ? `<span class="n">${n}</span>` : ''}</a>`;
+
+  const options = (profiles.length ? profiles : [profile]).map((p) =>
+    `<option value="${esc(p.slug)}"${p.slug === profile.slug ? ' selected' : ''}>${
+      esc(p.name)}</option>`).join('');
 
   return `<!doctype html>
 <html lang="en" data-theme="light"><head>
@@ -540,9 +654,29 @@ try {
   .rail{background:var(--c-1);border-right:1px solid var(--line);position:sticky;top:0;
         align-self:start;height:100dvh;padding:20px 14px;display:flex;
         flex-direction:column;gap:2px}
-  .brand{display:flex;align-items:center;gap:9px;padding:2px 10px 16px;font-weight:700;
+  .brand{display:flex;align-items:center;gap:9px;padding:2px 10px 14px;font-weight:700;
          letter-spacing:-.02em;font-size:15px}
+  .brand .ico{color:var(--accent);width:18px;height:18px}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);flex:none}
+  .ico{width:17px;height:17px;flex:none}
+
+  /* Profile switcher. Switching is switching account, so it sits above the
+     navigation rather than beside the sign-out line. */
+  .psel{display:block;padding:0 3px 14px;margin-bottom:6px;border-bottom:1px solid var(--line)}
+  .plab{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.09em;
+        color:var(--muted);font-weight:600;margin:0 8px 5px}
+  .psel select{width:100%;font:inherit;font-size:13.5px;font-weight:600;color:var(--fg);
+        background:var(--c-2);border:1px solid var(--line);border-radius:var(--r-s);
+        padding:7px 9px;cursor:pointer}
+  .newp{margin-top:8px;font-size:12.5px;color:var(--muted)}
+  .newp>summary{cursor:pointer;padding:7px 11px;border-radius:var(--r-s);list-style:none}
+  .newp>summary::-webkit-details-marker{display:none}
+  .newp>summary::before{content:'+ ';font-weight:700}
+  .newp>summary:hover{background:var(--c-2);color:var(--fg)}
+  .newp input,.newp textarea{width:100%;font:inherit;font-size:12.5px;margin:6px 0 0;
+        padding:7px 9px;border:1px solid var(--line);border-radius:var(--r-s);
+        background:var(--c-1);color:var(--fg);resize:vertical}
+  .newp button{margin-top:7px;width:100%}
   .nav{display:flex;align-items:center;gap:8px;padding:8px 11px;border-radius:var(--r-s);
        text-decoration:none;font-size:14px;white-space:nowrap;color:var(--muted);
        transition:background .15s,color .15s}
@@ -720,7 +854,9 @@ try {
     .app{grid-template-columns:1fr}
     .rail{position:static;height:auto;flex-direction:row;overflow-x:auto;border-right:0;
           border-bottom:1px solid var(--line);padding:10px 12px;gap:4px;align-items:center}
-    .brand,.foot{display:none}
+    .brand,.foot,.newp{display:none}
+    .psel{padding:0;margin:0;border:0;flex:none}
+    .plab{display:none}
     .nav .n{margin-left:6px}
     .tog{margin:0 0 0 auto;width:auto}
     .main{padding:18px 16px 90px}
@@ -732,12 +868,27 @@ try {
 </style></head><body>
 <div class="app">
 <nav class="rail">
-  <div class="brand"><span class="dot"></span>Leads</div>
+  <div class="brand">${icon('glass')}<span>Leads</span></div>
+
+  <label class="psel">
+    <span class="plab">Profile</span>
+    <select id="profile" aria-label="Switch profile">${options}</select>
+  </label>
+
   ${item('/', 'today', 'Today', counts.todo || 0)}
   ${item('/sent', 'sent', 'Sent', counts.sent || 0)}
   ${item('/skipped', 'skipped', 'Skipped', counts.skipped || 0)}
   ${item('/bounced', 'bounced', 'Bounced', counts.bounced || 0)}
   ${item('/metrics', 'metrics', 'Metrics', 0)}
+  ${item('/calendar', 'calendar', 'Calendar', 0)}
+
+  <details class="newp">
+    <summary>New profile</summary>
+    <input id="pname" type="text" placeholder="What to call it" maxlength="80">
+    <textarea id="pbrief" rows="4" placeholder="Who do you want to reach? Two sentences is enough — the trades, the size of business, and anything that would disqualify one."></textarea>
+    <button id="pcreate" type="button" class="go sm">Create</button>
+  </details>
+
   <button class="tog" id="theme" type="button" aria-label="Switch between light and dark">
     <span id="themelabel">Dark</span>
   </button>
@@ -838,6 +989,50 @@ document.addEventListener('change', (ev) => {
   const el = ev.target;
   if (el.dataset.filter) return go({ [el.dataset.filter]: el.value });
   if (el.id === 'day') return go({ day: el.value });
+  // Switching profile is switching account: drop every filter and land on the
+  // same page of the other one, rather than carrying a search across.
+  if (el.id === 'profile') {
+    const u = new URL(location.href);
+    location.assign(u.pathname + '?profile=' + encodeURIComponent(el.value));
+  }
+});
+
+// Booking times arrive as UTC, because the Worker rendering them has no idea
+// where the reader is. Rewritten here, once, in the browser that does know.
+for (const t of document.querySelectorAll('time.t[datetime]')) {
+  const d = new Date(t.getAttribute('datetime'));
+  if (!isNaN(d)) t.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+for (const t of document.querySelectorAll('time.d[datetime]')) {
+  const d = new Date(t.getAttribute('datetime') + 'T12:00:00Z');
+  if (!isNaN(d)) {
+    t.textContent = d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+  }
+}
+
+// A new profile. The model writes the categories, the keywords and the scoring
+// brief from this one sentence; nothing here is code the person has to write.
+const create = document.getElementById('pcreate');
+if (create) create.addEventListener('click', async () => {
+  const name = document.getElementById('pname');
+  const brief = document.getElementById('pbrief');
+  if ((brief.value || '').trim().length < 40) {
+    flash('Say a little more about who you want to reach');
+    brief.focus();
+    return;
+  }
+  create.disabled = true;
+  create.textContent = 'Working…';
+  try {
+    const res = await post('/api/profiles', { name: name.value, brief: brief.value });
+    flash('Created — ' + (res.niches || []).length + ' categories, ' +
+          res.seed_keywords + ' search terms');
+    setTimeout(() => location.assign('/?profile=' + encodeURIComponent(res.slug)), 1500);
+  } catch (e) {
+    create.disabled = false;
+    create.textContent = 'Create';
+    flash(e.message);
+  }
 });
 
 document.addEventListener('click', async (ev) => {

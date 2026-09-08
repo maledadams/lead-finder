@@ -11,8 +11,8 @@ function harness(modelReply) {
   const raw = new DatabaseSync(':memory:');
   raw.exec(SCHEMA);
   raw.exec(`
-    INSERT INTO entities (id, display_name, domain, website, niche, contact_email, score, score_reason, state, first_seen_at, updated_at, last_evaluated_at)
-      VALUES ('e1','Glasshaus Gardens','fettlebotanic.com','https://fettlebotanic.com',
+    INSERT INTO entities (id, profile_id, display_name, domain, website, niche, contact_email, score, score_reason, state, first_seen_at, updated_at, last_evaluated_at)
+      VALUES ('e1','p-creative','Glasshaus Gardens','fettlebotanic.com','https://fettlebotanic.com',
               'beauty_wellness','hello@fettlebotanic.com',63,'model rationale','EVALUATED',
               '2026-01-01','2026-01-01','2026-01-01');
     INSERT INTO snapshots (id, entity_id, url, fetched_at, ok, text_sample)

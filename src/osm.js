@@ -154,8 +154,75 @@ const CRAFT_TAGS = [
 // name, because the tagging does not distinguish them.
 const NOT_CREATIVE = /\b(?:cleaners?|dry\s*clean|laundr|alterations?|tailor(?:ing|s)?|shoe\s*repair|cobbler|locksmith|barber|nail\s*salon|pharmacy|deli|bodega|smoke\s*shop|check\s*cashing|wireless|mobile\s*repair)\b/i;
 
-/** Map an OSM category onto the internal niche taxonomy. */
-export function nicheForTags(tags) {
+// ---------------------------------------------------------------------------
+// What a profile looks for
+// ---------------------------------------------------------------------------
+
+/**
+ * The OSM search a profile performs, derived from its own niches.
+ *
+ * The creative profile has no stored configuration and gets the hand-tuned
+ * lists above — every exclusion in them was earned by a bad sweep, and none of
+ * it generalises to clinics or plumbers. A configured profile brings its own
+ * tags per niche, which is also how a result is classified: the niche that
+ * claimed the tag owns the lead.
+ *
+ * `social` is the real difference between the two populations. For a boutique
+ * with no website, an Instagram IS the signal — it says the owner is
+ * brand-conscious and has nowhere to send people. For a dental clinic it is
+ * noise: a clinic with a phone and no website is exactly the lead, whether or
+ * not anyone there posts. So the fallback contact tag differs.
+ */
+export function osmSpecFor(profile) {
+  const niches = profile?.niches || {};
+  const configured = Object.values(niches).some((n) => n?.osm);
+  if (!configured) {
+    return {
+      tags: { shop: SHOP_TAGS, craft: CRAFT_TAGS, amenity: [], healthcare: [], office: [] },
+      byNiche: null,
+      social: true,
+      nameFilter: NOT_CREATIVE,
+      fallbackNiche: 'lifestyle_brand',
+    };
+  }
+
+  const fields = ['amenity', 'healthcare', 'craft', 'shop', 'office'];
+  const tags = Object.fromEntries(fields.map((f) => [f, []]));
+  const byNiche = {};
+  for (const [slug, n] of Object.entries(niches)) {
+    byNiche[slug] = {};
+    for (const f of fields) {
+      const values = (Array.isArray(n?.osm?.[f]) ? n.osm[f] : []).map(String);
+      byNiche[slug][f] = values;
+      tags[f].push(...values);
+    }
+  }
+  for (const f of fields) tags[f] = [...new Set(tags[f])];
+  return {
+    tags,
+    byNiche,
+    social: false,
+    nameFilter: null,
+    fallbackNiche: Object.keys(niches)[0] || null,
+  };
+}
+
+/** Map an OSM category onto a profile's niche taxonomy. */
+export function nicheForTags(tags, spec = osmSpecFor(null)) {
+  // A configured profile classifies by its own tag lists, so a lead can only
+  // ever land in a category that profile actually writes emails for.
+  if (spec.byNiche) {
+    for (const [slug, fields] of Object.entries(spec.byNiche)) {
+      for (const [field, values] of Object.entries(fields)) {
+        if (tags[field] && values.includes(tags[field])) return slug;
+      }
+    }
+    return spec.fallbackNiche;
+  }
+  return creativeNiche(tags);
+}
+
+function creativeNiche(tags) {
   const shop = tags.shop || '';
   const craft = tags.craft || '';
 
@@ -193,28 +260,33 @@ export function nicheForTags(tags) {
  * A business with neither a site nor a social presence is skipped: there is
  * nothing to judge it on and no honest way to personalise an email.
  */
-function buildQuery([s, w, n, e]) {
+function buildQuery([s, w, n, e], spec) {
   const bbox = `${s},${w},${n},${e}`;
-  const shops = SHOP_TAGS.join('|');
-  const crafts = CRAFT_TAGS.join('|');
-  return `[out:json][timeout:50];(` +
-    // has a website
-    `nwr["shop"~"^(${shops})$"]["website"](${bbox});` +
-    `nwr["craft"~"^(${crafts})$"]["website"](${bbox});` +
-    // no website, but a real presence worth talking to
-    `nwr["shop"~"^(${shops})$"]["name"][!"website"]["contact:instagram"](${bbox});` +
-    // Instagram is required here too: a maker who curates one is
-    // brand-conscious, which is the whole signal. Without it the results are
-    // dominated by service shops.
-    `nwr["craft"~"^(${crafts})$"]["name"][!"website"]["contact:instagram"](${bbox});` +
-    `);out center 400;`;
+  // The contact tag a no-website lead must carry. See osmSpecFor(): Instagram
+  // for the creative population, a phone number for service businesses.
+  const reachable = spec.social ? '["contact:instagram"]' : '["phone"]';
+
+  const clauses = [];
+  for (const [field, values] of Object.entries(spec.tags)) {
+    if (!values.length) continue;
+    const alt = values.join('|');
+    clauses.push(`nwr["${field}"~"^(${alt})$"]["website"](${bbox});`);
+    clauses.push(`nwr["${field}"~"^(${alt})$"]["name"][!"website"]${reachable}(${bbox});`);
+  }
+  if (!clauses.length) return null;
+  return `[out:json][timeout:50];(${clauses.join('')});out center 400;`;
 }
 
 /**
  * Query one metro. Returns candidate records, or [] on any failure.
  */
-export async function queryMetro(metro, bbox, _userAgent) {
-  const query = encodeURIComponent(buildQuery(bbox));
+export async function queryMetro(metro, bbox, _userAgent, spec = osmSpecFor(null)) {
+  const built = buildQuery(bbox, spec);
+  // A profile whose configuration names no OSM tags discovers by keyword only.
+  // Saying so beats sending Overpass an empty union and reading nothing into
+  // the zero results that come back.
+  if (!built) return { candidates: [], error: 'no-osm-tags-for-profile' };
+  const query = encodeURIComponent(built);
   const attempts = [];
 
   for (const mirror of OVERPASS_MIRRORS) {
@@ -234,7 +306,11 @@ export async function queryMetro(metro, bbox, _userAgent) {
     }
 
     if (!payload?.elements) { attempts.push(`${host(mirror)}:shape`); continue; }
-    return { candidates: toCandidates(payload.elements, metro), error: null, mirror: host(mirror) };
+    return {
+      candidates: toCandidates(payload.elements, metro, spec),
+      error: null,
+      mirror: host(mirror),
+    };
   }
 
   return { candidates: [], error: `all-mirrors-failed(${attempts.join(',')})` };
@@ -246,14 +322,14 @@ const host = (u) => { try { return new URL(u).hostname.split('.')[0]; } catch { 
  * Turn Overpass elements into seed candidates, dropping chains and anything
  * without a usable independent website.
  */
-export function toCandidates(elements, metro) {
+export function toCandidates(elements, metro, spec = osmSpecFor(null)) {
   const out = [];
   const seen = new Set();
 
   for (const el of elements) {
     const tags = el?.tags || {};
     if (isChain(tags)) continue;
-    if (NOT_CREATIVE.test(tags.name || '')) continue;
+    if (spec.nameFilter?.test(tags.name || '')) continue;
 
     const site = tags.website || tags['contact:website'];
     const domain = normalizeDomain(site);
@@ -270,7 +346,7 @@ export function toCandidates(elements, metro) {
         website: null,
         domain: null,
         display_name: tags.name,
-        niche: nicheForTags(tags),
+        niche: nicheForTags(tags, spec),
         location_text: [tags['addr:city'], tags['addr:state']].filter(Boolean).join(', ') || metro,
         country: 'US',
         contact_email: tags.email || tags['contact:email'] || null,
@@ -278,7 +354,7 @@ export function toCandidates(elements, metro) {
         instagram,
         phone: tags.phone || tags['contact:phone'] || null,
         discovery_source: `osm:${metro}`,
-        osm_category: tags.shop || tags.craft || null,
+        osm_category: tags.shop || tags.craft || tags.amenity || tags.healthcare || tags.office || null,
         osm_tags: compactTags(tags),
         has_website: false,
       });
@@ -296,7 +372,7 @@ export function toCandidates(elements, metro) {
       website: `https://${domain}`,
       domain,
       display_name: tags.name || null,
-      niche: nicheForTags(tags),
+      niche: nicheForTags(tags, spec),
       location_text: [city, state].filter(Boolean).join(', ') || metro,
       country: 'US',
       contact_email: tags.email || tags['contact:email'] || null,
@@ -304,7 +380,7 @@ export function toCandidates(elements, metro) {
       instagram,
       phone: tags.phone || tags['contact:phone'] || null,
       discovery_source: `osm:${metro}`,
-      osm_category: tags.shop || tags.craft || null,
+      osm_category: tags.shop || tags.craft || tags.amenity || tags.healthcare || tags.office || null,
       osm_tags: compactTags(tags),
       has_website: true,
     });
@@ -344,15 +420,16 @@ export function isChain(tags) {
  * its tags say. Run after a few metros have been swept.
  */
 export async function flagCrossMetroChains(db, profileId, minMetros = 3) {
+  if (!profileId) throw new Error('flagCrossMetroChains needs a profileId');
   const { results } = await db
     .prepare(
       `SELECT domain, COUNT(DISTINCT discovery_source) AS metros
        FROM entities
-       WHERE domain IS NOT NULL AND discovery_source LIKE 'osm:%'
+       WHERE profile_id = ? AND domain IS NOT NULL AND discovery_source LIKE 'osm:%'
        GROUP BY domain
        HAVING metros >= ?`
     )
-    .bind(minMetros)
+    .bind(profileId, minMetros)
     .all();
 
   const chains = (results || []).map((r) => r.domain);
@@ -362,10 +439,11 @@ export async function flagCrossMetroChains(db, profileId, minMetros = 3) {
     .prepare(
       `UPDATE entities
        SET state = 'REJECTED', reject_reason = 'chain:multi-metro', updated_at = ?
-       WHERE domain IN (${chains.map(() => '?').join(',')})
+       WHERE profile_id = ?
+         AND domain IN (${chains.map(() => '?').join(',')})
          AND state NOT IN ('CONTACTED','REPLIED','CONVERSATION','CLIENT')`
     )
-    .bind(nowIso(), ...chains)
+    .bind(nowIso(), profileId, ...chains)
     .run();
 
   return { flagged: chains.length, domains: chains };
@@ -396,6 +474,7 @@ function compactTags(tags) {
  * the twenty-four that have never been touched.
  */
 export async function nextMetros(db, profileId, limit, staleAfterHours = 20, metros = null) {
+  if (!profileId) throw new Error('nextMetros needs a profileId');
   const { results } = await db
     .prepare("SELECT keyword, last_run_at FROM source_cursor WHERE profile_id = ? AND keyword LIKE 'osm:%'").bind(profileId)
     .all();
@@ -410,6 +489,7 @@ export async function nextMetros(db, profileId, limit, staleAfterHours = 20, met
 }
 
 export async function recordMetroRun(db, profileId, metro, found) {
+  if (!profileId) throw new Error('recordMetroRun needs a profileId');
   await db
     .prepare(
       `INSERT INTO source_cursor (profile_id, keyword, last_run_at, total_found, runs)

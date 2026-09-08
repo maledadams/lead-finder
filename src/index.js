@@ -18,6 +18,10 @@ import { harvestWikipedia, mineCorpus, storeCandidates, validateBatch } from './
 import { queryCertTransparency } from './sources.js';
 import { deriveLessons, recordFeedback, rerankOne } from './learning.js';
 import {
+  createProfile, listProfiles, resolveProfile, setDefaultProfile,
+} from './profiles.js';
+import { calConfigured, upcomingBookings } from './cal.js';
+import {
   completeLogin, exchangeKeyForSession, googleConfigured, logout,
   sessionFrom, startLogin, verifySession,
 } from './auth.js';
@@ -102,7 +106,17 @@ const PAGES = {
   '/skipped': 'skipped',
   '/bounced': 'bounced',
   '/metrics': 'metrics',
+  '/calendar': 'calendar',
 };
+
+/** The profile a browser last switched to, remembered so API calls agree. */
+const PROFILE_COOKIE = 'lf_profile';
+
+function cookie(request, name) {
+  const raw = request.headers.get('cookie') || '';
+  const hit = raw.split(/;\s*/).find((c) => c.startsWith(`${name}=`));
+  return hit ? decodeURIComponent(hit.slice(name.length + 1)) : null;
+}
 
 /** A date filter is only ever YYYY-MM-DD. Anything else is not a date. */
 function dateParam(s) {
@@ -190,11 +204,24 @@ export default {
     const db = env.DB;
     // One queue build a day; every other trigger is a crawl pass.
     const isQueueRun = event.cron === '0 11 * * *';
-    ctx.waitUntil(
-      (isQueueRun ? buildQueue(env, db) : runCrawl(env, db)).catch((err) => {
-        console.error('scheduled run failed', event.cron, err?.stack || err);
-      })
-    );
+
+    // Every profile gets its own run, sequentially.
+    //
+    // Sequential rather than parallel on purpose: the two profiles share one
+    // Workers AI account and one outbound fetch allowance, so running them at
+    // once would just make them contend. Each has its own daily budget, so the
+    // second profile is not starved by the first — and one failing must not
+    // take the other down, hence the per-profile catch.
+    ctx.waitUntil((async () => {
+      for (const row of await listProfiles(db)) {
+        const profile = await resolveProfile(db, row.slug);
+        try {
+          await (isQueueRun ? buildQueue(env, db, profile) : runCrawl(env, db, profile));
+        } catch (err) {
+          console.error('scheduled run failed', event.cron, row.slug, err?.stack || err);
+        }
+      }
+    })());
 
     // Bounces are checked on every tick, not only the queue run: an address
     // that died should stop being usable within hours, not tomorrow. Kept in
@@ -310,6 +337,33 @@ export default {
       return json({ error: 'unauthorized' }, 401);
     }
 
+    // ---- which profile is this request for? -----------------------------
+    //
+    // ?profile= wins, then the cookie, then the default. Resolved once, here,
+    // and passed down explicitly — nothing below reads an ambient current
+    // profile, because a query that quietly widened to both profiles would
+    // return plausible-looking rows and never error.
+    const wantedProfile = url.searchParams.get('profile') || cookie(request, PROFILE_COOKIE);
+    let profile;
+    try {
+      profile = await resolveProfile(db, wantedProfile);
+    } catch (err) {
+      return json({ error: String(err?.message || err) }, 503);
+    }
+    const pid = profile.id;
+
+    /**
+     * Does this row belong to the profile the request is for?
+     *
+     * Every id-addressed write goes through this. Without it a tab left open on
+     * one profile could send, skip or correct another profile's lead — the ids
+     * are guessable enough and the profiles are supposed to be separate
+     * accounts, so this is a boundary, not a nicety.
+     */
+    const ownedBy = async (table, id) => Boolean(await db.prepare(
+      `SELECT 1 FROM ${table} WHERE id = ? AND profile_id = ?`
+    ).bind(id, pid).first());
+
     try {
       // ---- dashboard ----------------------------------------------------
       //
@@ -330,6 +384,9 @@ export default {
           nonce,
           signedInAs,
           sending,
+          profile,
+          profiles: await listProfiles(db),
+          calendar: view === 'calendar' ? await upcomingBookings(env) : null,
           day: url.searchParams.get('day') || todayStr(),
           page: Math.max(1, Number(url.searchParams.get('page')) || 1),
           q: (url.searchParams.get('q') || '').trim().slice(0, 80),
@@ -342,19 +399,26 @@ export default {
             ...SECURITY_HEADERS,
             'content-type': 'text/html; charset=utf-8',
             'content-security-policy': cspFor(nonce),
+            // Switching profile in the sidebar has to stick for the API calls
+            // the page then makes, which carry no query string of their own.
+            ...(url.searchParams.get('profile')
+              ? { 'set-cookie': `${PROFILE_COOKIE}=${encodeURIComponent(profile.slug)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000` }
+              : {}),
           },
         });
       }
 
       // ---- read ---------------------------------------------------------
       if (url.pathname === '/api/queue' && request.method === 'GET') {
-        return json(await getQueue(db, url.searchParams.get('day') || todayStr()));
+        return json(await getQueue(db, pid, url.searchParams.get('day') || todayStr()));
       }
 
       if (url.pathname === '/api/entity' && request.method === 'GET') {
         const id = url.searchParams.get('id');
         if (!id) return json({ error: 'id required' }, 400);
-        const entity = await db.prepare('SELECT * FROM entities WHERE id = ?').bind(id).first();
+        const entity = await db.prepare(
+          'SELECT * FROM entities WHERE id = ? AND profile_id = ?'
+        ).bind(id, pid).first();
         if (!entity) return json({ error: 'not found' }, 404);
         const { results: snaps } = await db
           .prepare('SELECT fetched_at, http_status, content_hash, ttfb_ms FROM snapshots WHERE entity_id = ? ORDER BY fetched_at DESC LIMIT 10')
@@ -366,12 +430,13 @@ export default {
 
       if (url.pathname === '/api/stats' && request.method === 'GET') {
         const [states, budget, frontier, totals] = await Promise.all([
-          db.prepare('SELECT state, COUNT(*) n FROM entities GROUP BY state').all(),
-          db.prepare('SELECT metric, used FROM budget WHERE day = ?').bind(todayStr()).all(),
-          db.prepare('SELECT status, COUNT(*) n FROM crawl_frontier GROUP BY status').all(),
-          db.prepare('SELECT COUNT(*) n, COUNT(DISTINCT domain) d FROM entities').first(),
+          db.prepare('SELECT state, COUNT(*) n FROM entities WHERE profile_id = ? GROUP BY state').bind(pid).all(),
+          db.prepare('SELECT metric, used FROM budget WHERE profile_id = ? AND day = ?').bind(pid, todayStr()).all(),
+          db.prepare('SELECT status, COUNT(*) n FROM crawl_frontier WHERE profile_id = ? GROUP BY status').bind(pid).all(),
+          db.prepare('SELECT COUNT(*) n, COUNT(DISTINCT domain) d FROM entities WHERE profile_id = ?').bind(pid).first(),
         ]);
         return json({
+          profile: profile.slug,
           day: todayStr(),
           entities: totals?.n || 0,
           distinct_domains: totals?.d || 0,
@@ -386,7 +451,7 @@ export default {
         const body = await request.json().catch(() => ({}));
         const seeds = Array.isArray(body.seeds) ? body.seeds.slice(0, 500) : [];
         if (!seeds.length) return json({ error: 'seeds[] required' }, 400);
-        return json(await ingestSeeds(db, seeds, body.source || 'manual-seed'));
+        return json(await ingestSeeds(db, pid, seeds, body.source || 'manual-seed'));
       }
 
       // The reviewer's decision. One endpoint, because sent/skipped/blocked
@@ -407,8 +472,10 @@ export default {
         }
 
         const row = await db
-          .prepare('SELECT o.entity_id, e.contact_email, e.domain FROM outreach o JOIN entities e ON e.id = o.entity_id WHERE o.id = ?')
-          .bind(outreachId).first();
+          .prepare(`SELECT o.entity_id, e.contact_email, e.domain
+                    FROM outreach o JOIN entities e ON e.id = o.entity_id
+                    WHERE o.id = ? AND o.profile_id = ?`)
+          .bind(outreachId, pid).first();
         if (!row) return json({ error: 'not-found' }, 404);
 
         if (decision === 'SENT') {
@@ -423,6 +490,7 @@ export default {
         await recordFeedback(db, {
           entityId: row.entity_id, outreachId, decision, reason,
           reviewer: signedInAs || request.headers.get('cf-access-authenticated-user-email') || 'api',
+          profileId: pid,
         });
 
         // Rerank just this lead, now, because the reviewer told us something
@@ -439,13 +507,14 @@ export default {
       // Fold accumulated feedback into general lessons. Cheap: one AI call
       // for a whole batch, and it applies to future evaluations only.
       if (url.pathname === '/api/run/learn' && request.method === 'POST') {
-        return json(await deriveLessons(env, db));
+        return json(await deriveLessons(env, db, pid));
       }
 
       if (url.pathname === '/api/lessons' && request.method === 'GET') {
         const { results } = await db.prepare(
-          'SELECT lesson, kind, niche, weight, source_count, created_at FROM lessons WHERE active = 1 ORDER BY weight DESC'
-        ).all();
+          `SELECT lesson, kind, niche, weight, source_count, created_at FROM lessons
+           WHERE profile_id = ? AND active = 1 ORDER BY weight DESC`
+        ).bind(pid).all();
         return json(results);
       }
 
@@ -459,7 +528,9 @@ export default {
         const id = edit[1];
         const body = await request.json().catch(() => ({}));
 
-        const row = await db.prepare('SELECT status FROM outreach WHERE id = ?').bind(id).first();
+        const row = await db.prepare(
+          'SELECT status FROM outreach WHERE id = ? AND profile_id = ?'
+        ).bind(id, pid).first();
         if (!row) return json({ error: 'not-found' }, 404);
         // A sent email is a record of what someone actually received. Editing
         // it would make the record a lie.
@@ -497,7 +568,9 @@ export default {
         const note = String(body.note || '').trim();
         if (note.length < 4) return json({ error: 'say what the bounce said' }, 400);
 
-        const row = await db.prepare('SELECT entity_id FROM outreach WHERE id = ?').bind(id).first();
+        const row = await db.prepare(
+          'SELECT entity_id FROM outreach WHERE id = ? AND profile_id = ?'
+        ).bind(id, pid).first();
         if (!row) return json({ error: 'not-found' }, 404);
 
         const res = await markBounced(db, id, note.slice(0, 200));
@@ -505,7 +578,7 @@ export default {
 
         await recordFeedback(db, {
           entityId: row.entity_id, outreachId: id, decision: 'BOUNCED', reason: note,
-          reviewer: signedInAs || 'dashboard',
+          reviewer: signedInAs || 'dashboard', profileId: pid,
         });
         return json(res);
       }
@@ -513,6 +586,7 @@ export default {
       // Put a skipped or bounced draft back into today's queue to edit and send.
       const back = url.pathname.match(/^\/api\/outreach\/([\w-]+)\/revive$/);
       if (back && request.method === 'POST') {
+        if (!(await ownedBy('outreach', back[1]))) return json({ error: 'not-found' }, 404);
         const res = await revive(db, back[1]);
         return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 409));
       }
@@ -521,6 +595,7 @@ export default {
       // which fields that implies and every one is validated before it lands.
       const correct = url.pathname.match(/^\/api\/entity\/([\w-]+)\/correct$/);
       if (correct && request.method === 'POST') {
+        if (!(await ownedBy('entities', correct[1]))) return json({ error: 'not-found' }, 404);
         const body = await request.json().catch(() => ({}));
         const res = await applyCorrection(env, db, correct[1], body.note, {
           reviewer: signedInAs || 'dashboard',
@@ -532,6 +607,7 @@ export default {
       // fills in GHOSTED for anyone left blank past the cutoff.
       const status = url.pathname.match(/^\/api\/entity\/([\w-]+)\/status$/);
       if (status && request.method === 'POST') {
+        if (!(await ownedBy('entities', status[1]))) return json({ error: 'not-found' }, 404);
         const body = await request.json().catch(() => ({}));
         const res = await setResponseStatus(db, status[1], body.status || null);
         return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 400));
@@ -545,7 +621,7 @@ export default {
       }
 
       if (url.pathname === '/api/run/ghost' && request.method === 'POST') {
-        return json(await sweepGhosted(db, Number(env.GHOST_AFTER_DAYS || 30)));
+        return json(await sweepGhosted(db, pid, Number(env.GHOST_AFTER_DAYS || 30)));
       }
 
       // Re-read the firma after editing it in Zoho, rather than waiting a day.
@@ -563,6 +639,7 @@ export default {
       // lead comes back — the crawler finding one on a re-crawl is the first.
       const setEmail = url.pathname.match(/^\/api\/entity\/([\w-]+)\/email$/);
       if (setEmail && request.method === 'POST') {
+        if (!(await ownedBy('entities', setEmail[1]))) return json({ error: 'not-found' }, 404);
         const body = await request.json().catch(() => ({}));
         const email = stripControl(body.email).toLowerCase();
         if (!/^[^\s@]+@[^\s@.]+\.[^\s@]+$/.test(email) || email.length > 254) {
@@ -584,6 +661,7 @@ export default {
            WHERE id = ?`
         ).bind(email, new Date().toISOString(), setEmail[1]).run();
 
+
         if (!res?.meta?.changes) return json({ error: 'not-found' }, 404);
         return json({ ok: true, contact_email: email });
       }
@@ -591,6 +669,7 @@ export default {
       const act = url.pathname.match(/^\/api\/outreach\/([\w-]+)\/(sent|skip|suppress)$/);
       if (act && request.method === 'POST') {
         const [, id, what] = act;
+        if (!(await ownedBy('outreach', id))) return json({ error: 'not-found' }, 404);
         if (what === 'sent') return json(await markSent(db, id));
         if (what === 'skip') return json(await markSkipped(db, id));
 
@@ -638,8 +717,9 @@ export default {
 
         const row = await db.prepare(
           `SELECT o.id, o.subject, o.body, o.status, o.entity_id, e.contact_email, e.display_name
-           FROM outreach o JOIN entities e ON e.id = o.entity_id WHERE o.id = ?`
-        ).bind(outreachId).first();
+           FROM outreach o JOIN entities e ON e.id = o.entity_id
+           WHERE o.id = ? AND o.profile_id = ?`
+        ).bind(outreachId, pid).first();
 
         if (!row) return json({ error: 'not-found' }, 404);
         // Never send the same draft twice, whatever the caller does.
@@ -685,7 +765,7 @@ export default {
         await markSent(db, outreachId);
         await recordFeedback(db, {
           entityId: row.entity_id, outreachId, decision: 'SENT', reason: null,
-          reviewer: signedInAs || 'dashboard',
+          reviewer: signedInAs || 'dashboard', profileId: pid,
         });
 
         return json({ sent: true, to: row.contact_email, sent_today: already + 1, cap });
@@ -699,10 +779,10 @@ export default {
       // cron path does. `?wait=1` keeps the old blocking behaviour for small
       // manual runs.
       if (url.pathname === '/api/run/crawl' && request.method === 'POST') {
-        if (url.searchParams.get('wait') === '1') return json(await runCrawl(env, db));
+        if (url.searchParams.get('wait') === '1') return json(await runCrawl(env, db, profile));
 
         ctx.waitUntil(
-          runCrawl(env, db).catch((err) => console.error('crawl failed', err?.stack || err))
+          runCrawl(env, db, profile).catch((err) => console.error('crawl failed', err?.stack || err))
         );
         return json({
           started: true,
@@ -714,8 +794,8 @@ export default {
       if (url.pathname === '/api/runs' && request.method === 'GET') {
         const { results } = await db.prepare(
           `SELECT kind, started_at, finished_at, stats, error
-           FROM runs ORDER BY started_at DESC LIMIT 8`
-        ).all();
+           FROM runs WHERE profile_id = ? ORDER BY started_at DESC LIMIT 8`
+        ).bind(pid).all();
         return json((results || []).map((r) => ({
           kind: r.kind,
           started_at: r.started_at,
@@ -727,32 +807,62 @@ export default {
       if (url.pathname === '/api/keywords' && request.method === 'GET') {
         const { results } = await db.prepare(
           `SELECT keyword, niche, source, status, certs_seen, domains_kept, leads_found, runs
-           FROM keywords ORDER BY
+           FROM keywords WHERE profile_id = ? ORDER BY
              CASE status WHEN 'ACTIVE' THEN 0 WHEN 'UNVALIDATED' THEN 1 ELSE 2 END,
              leads_found DESC, certs_seen DESC LIMIT 400`
-        ).all();
+        ).bind(pid).all();
         const counts = await db.prepare(
-          'SELECT status, COUNT(*) n FROM keywords GROUP BY status'
-        ).all();
+          'SELECT status, COUNT(*) n FROM keywords WHERE profile_id = ? GROUP BY status'
+        ).bind(pid).all();
         return json({ counts: counts.results, keywords: results });
       }
 
       if (url.pathname === '/api/run/harvest' && request.method === 'POST') {
-        const h = await harvestWikipedia(db, env.USER_AGENT);
-        const mined = await mineCorpus(db);
-        const minedAdded = mined.length ? await storeCandidates(db, mined, 'corpus') : 0;
+        const h = await harvestWikipedia(db, pid, env.USER_AGENT);
+        const mined = await mineCorpus(db, pid);
+        const minedAdded = mined.length ? await storeCandidates(db, pid, mined, 'corpus') : 0;
         return json({ wikipedia: h, corpus_terms_added: minedAdded });
       }
 
       if (url.pathname === '/api/run/validate' && request.method === 'POST') {
         const limit = Math.min(Number(url.searchParams.get('limit') || 10), 40);
-        const res = await validateBatch(db, limit, queryCertTransparency, env.USER_AGENT);
+        const res = await validateBatch(db, pid, limit, queryCertTransparency, env.USER_AGENT);
         return json(res);
       }
 
       if (url.pathname === '/api/run/queue' && request.method === 'POST') {
         const dryRun = url.searchParams.get('dry') === '1';
-        return json(await buildQueue(env, db, { dryRun }));
+        return json(await buildQueue(env, db, profile, { dryRun }));
+      }
+
+      // ---- profiles -----------------------------------------------------
+      if (url.pathname === '/api/profiles' && request.method === 'GET') {
+        return json({ active: profile.slug, profiles: await listProfiles(db) });
+      }
+
+      // A new outreach operation, described in a sentence. The model writes the
+      // categories, the keywords, the scoring brief and the OSM tags; every
+      // part of it is validated before a row exists.
+      if (url.pathname === '/api/profiles' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const res = await createProfile(env, db, {
+          name: body.name, brief: body.brief, slug: body.slug,
+        });
+        return json(res, res.ok ? 200 : 400);
+      }
+
+      const asDefault = url.pathname.match(/^\/api\/profiles\/([\w-]+)\/default$/);
+      if (asDefault && request.method === 'POST') {
+        const res = await setDefaultProfile(db, asDefault[1]);
+        return json(res, res.ok ? 200 : 404);
+      }
+
+      // ---- calendar (shared across profiles) ----------------------------
+      if (url.pathname === '/api/calendar' && request.method === 'GET') {
+        if (!calConfigured(env)) return json({ error: 'set CAL_API_KEY first' }, 503);
+        return json(await upcomingBookings(env, {
+          limit: Math.min(Number(url.searchParams.get('limit')) || 25, 100),
+        }));
       }
 
       return json({ error: 'not found', pathname: url.pathname }, 404);

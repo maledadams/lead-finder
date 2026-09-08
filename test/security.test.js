@@ -90,6 +90,8 @@ test('the favicon data URI cannot break out of its attribute', async () => {
   const html = await renderDashboard(db, {}, {
     view: 'today', nonce: 'n', signedInAs: null, sending: null,
     day: '2026-09-08', page: 1, q: '', from: null, to: null,
+    profile: { id: 'p-creative', slug: 'creative', name: 'Creative', niches: {} },
+    profiles: [{ id: 'p-creative', slug: 'creative', name: 'Creative', is_default: 1 }],
   });
 
   const icons = html.match(/<link rel="icon" href="([^"]*)">/g) || [];

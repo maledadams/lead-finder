@@ -21,7 +21,7 @@ import {
   addToFrontier, markFrontier, selectPeerLinks, staleEntities, takeFrontierBatch,
 } from './discover.js';
 import { nextKeywords, queryCertTransparency, recordKeywordRun } from './sources.js';
-import { flagCrossMetroChains, nextMetros, queryMetro, recordMetroRun } from './osm.js';
+import { flagCrossMetroChains, nextMetros, osmSpecFor, queryMetro, recordMetroRun } from './osm.js';
 import {
   activeKeywords, demoteUnproductive, harvestWikipedia, mineCorpus, recordUse,
   storeCandidates, validateBatch,
@@ -71,8 +71,8 @@ export async function runCrawl(env, db, profile) {
   };
 
   await db
-    .prepare('INSERT INTO runs (id, kind, started_at) VALUES (?, ?, ?)')
-    .bind(runId, 'crawl', startedAt)
+    .prepare('INSERT INTO runs (id, profile_id, kind, started_at) VALUES (?, ?, ?, ?)')
+    .bind(runId, profileId, 'crawl', startedAt)
     .run();
 
   try {
@@ -98,9 +98,9 @@ export async function runCrawl(env, db, profile) {
     const newShare = Math.ceil(batchSize * 0.7);
     const staleShare = Math.max(0, batchSize - newShare);
 
-    const frontier = await takeFrontierBatch(db, newShare);
+    const frontier = await takeFrontierBatch(db, profileId, newShare);
     const stale = staleShare
-      ? await staleEntities(db, {
+      ? await staleEntities(db, profileId, {
           days: reEvalDays,
           nearMissFrom: Math.max(0, minQueue - 12),
           nearMissTo: minQueue - 1,
@@ -115,20 +115,21 @@ export async function runCrawl(env, db, profile) {
         `SELECT id, display_name, instagram, phone, osm_tags, niche, contact_email,
                 location_text, score, state, last_evaluated_at
          FROM entities
-         WHERE has_website = 0
+         WHERE profile_id = ?
+           AND has_website = 0
            AND state NOT IN ('CONTACTED','REPLIED','CONVERSATION','CLIENT','DO_NOT_CONTACT','REJECTED')
            AND (last_evaluated_at IS NULL OR last_evaluated_at < ?)
          ORDER BY COALESCE(last_evaluated_at, '') ASC
          LIMIT ?`
       )
-      .bind(new Date(Date.now() - reEvalDays * 86400_000).toISOString(),
+      .bind(profileId, new Date(Date.now() - reEvalDays * 86400_000).toISOString(),
             num(env, 'NO_SITE_BATCH', 15))
       .all();
 
     for (const e of noSite.results || []) {
       if (!budget.canSpend('ai') || noSiteOutOfTime()) break;
       try {
-        await processNoWebsite(env, db, { entity: e, budget, stats, minQueue });
+        await processNoWebsite(env, db, { entity: e, budget, stats, minQueue, profile });
       } catch (err) {
         stats.errors++;
         console.error('processNoWebsite failed', e.id, err?.message);
@@ -145,15 +146,15 @@ export async function runCrawl(env, db, profile) {
       if (outOfTime()) { stats.stopped_on_time = true; break; }
       const url = normalizeUrl(target.url);
       if (!url) {
-        if (target.kind === 'frontier') await markFrontier(db, target.url, 'SKIPPED');
+        if (target.kind === 'frontier') await markFrontier(db, profileId, target.url, 'SKIPPED');
         continue;
       }
 
       try {
-        await processOne(env, db, { fetcher, budget, target, url, stats, minPrescore, minQueue });
+        await processOne(env, db, { fetcher, budget, target, url, stats, minPrescore, minQueue, profile });
       } catch (err) {
         stats.errors++;
-        if (target.kind === 'frontier') await markFrontier(db, target.url, 'ERROR');
+        if (target.kind === 'frontier') await markFrontier(db, profileId, target.url, 'ERROR');
         console.error('processOne failed', url, err?.message);
       }
     }
@@ -211,8 +212,11 @@ async function topUpFrontier(env, db, budget, outOfTime = () => false, profile =
   // Higher quality than the CT sweep: every record arrives with a name, a
   // category, and a verified US street address, so geography is established
   // as fact before we spend a fetch on it.
+  // Which OSM tags this profile looks for, and how it treats a lead with no
+  // website. Derived from the profile's own niches — see osmSpecFor().
+  const osmSpec = osmSpecFor(profile);
   const metroCount = Math.min(num(env, 'SOURCE_METROS_PER_RUN', 2), budget.remaining('source'));
-  const due = await nextMetros(db, metroCount);
+  const due = await nextMetros(db, profileId, metroCount, 20, profile?.metros);
   if (!due.length && frontierHealthy) return { ...out, skipped: 'all-metros-swept-recently' };
 
   for (const { metro, bbox } of due) {
@@ -221,29 +225,29 @@ async function topUpFrontier(env, db, budget, outOfTime = () => false, profile =
     // being starved of time by the sources that feed it.
     if (!budget.canSpend('source') || outOfTime()) break;
 
-    const { candidates, error } = await queryMetro(metro, bbox, env.USER_AGENT);
+    const { candidates, error } = await queryMetro(metro, bbox, env.USER_AGENT, osmSpec);
     budget.spend('source');
     out.osm.metros.push(metro);
 
     if (error) {
       out.osm.errors++;
       out.osm.last_error = `${metro}: ${error}`;
-      await recordMetroRun(db, metro, 0);
+      await recordMetroRun(db, profileId, metro, 0);
       continue;
     }
 
     out.osm.businesses += candidates.length;
     // Full ingest rather than a bare frontier push, so the name, niche and
     // location survive into the entity record.
-    const res = await ingestSeeds(db, candidates, `osm:${metro}`);
+    const res = await ingestSeeds(db, profileId, candidates, `osm:${metro}`);
     out.osm.new_entities += res.accepted;
-    await recordMetroRun(db, metro, res.accepted);
+    await recordMetroRun(db, profileId, metro, res.accepted);
   }
 
   // Chains that OSM never tagged reveal themselves by appearing in several
   // cities at once. Cheap to check and needs no list to maintain.
   if (out.osm.metros.length) {
-    const chains = await flagCrossMetroChains(db);
+    const chains = await flagCrossMetroChains(db, profileId);
     out.osm.chains_flagged = chains.flagged;
   }
 
@@ -255,13 +259,13 @@ async function topUpFrontier(env, db, budget, outOfTime = () => false, profile =
   if ((stillPending?.n || 0) >= lowWater) return out;
 
   // Keep the vocabulary fed and measured before spending queries on it.
-  out.ct.vocab = await maintainVocabulary(env, db, budget, outOfTime);
+  out.ct.vocab = await maintainVocabulary(env, db, budget, outOfTime, profile);
 
   const kwCount = Math.min(num(env, 'SOURCE_KEYWORDS_PER_RUN', 3), budget.remaining('source'));
   // Prefer harvested-and-validated terms; fall back to the bootstrap list
   // only while the keywords table is still empty.
-  const active = await activeKeywords(db, kwCount);
-  const picks = active.length ? active : await nextKeywords(db, kwCount);
+  const active = await activeKeywords(db, profileId, kwCount);
+  const picks = active.length ? active : await nextKeywords(db, profileId, kwCount, profile?.seedKeywords);
 
   for (const { keyword } of picks) {
     if (!budget.canSpend('source') || outOfTime()) break;
@@ -270,11 +274,11 @@ async function topUpFrontier(env, db, budget, outOfTime = () => false, profile =
     budget.spend('source');
     out.ct.keywords.push(keyword);
 
-    if (error) { out.ct.errors++; await recordKeywordRun(db, keyword, 0); continue; }
+    if (error) { out.ct.errors++; await recordKeywordRun(db, profileId, keyword, 0); continue; }
 
     out.ct.domains_found += domains.length;
     const added = await addToFrontier(
-      db,
+      db, profileId,
       domains.map((d) => ({
         url: `https://${d}`,
         priority: 40,                       // below a strong peer link, above a weak one
@@ -284,8 +288,8 @@ async function topUpFrontier(env, db, budget, outOfTime = () => false, profile =
       null
     );
     out.ct.frontier_added += added;
-    await recordKeywordRun(db, keyword, added);
-    await recordUse(db, keyword, added);
+    await recordKeywordRun(db, profileId, keyword, added);
+    await recordUse(db, profileId, keyword, added);
   }
 
   return out;
@@ -299,30 +303,35 @@ async function topUpFrontier(env, db, budget, outOfTime = () => false, profile =
  * yield is known. Corpus mining kicks in once there are enough scored pages
  * to learn from.
  */
-async function maintainVocabulary(env, db, budget, outOfTime = () => false) {
+async function maintainVocabulary(env, db, budget, outOfTime = () => false, profile = null) {
+  const profileId = profile?.id || budget.profileId;
   const out = { harvested: 0, mined: 0, validated: null };
 
-  const have = await db.prepare('SELECT COUNT(*) AS n FROM keywords').first();
+  // This profile's vocabulary, not the deployment's: a second profile whose
+  // keyword table is empty must still bootstrap, even while the first one has
+  // thousands of terms.
+  const have = await db.prepare('SELECT COUNT(*) AS n FROM keywords WHERE profile_id = ?')
+    .bind(profileId).first();
 
   if ((have?.n || 0) === 0) {
-    const h = await harvestWikipedia(db, env.USER_AGENT);
+    const h = await harvestWikipedia(db, profileId, env.USER_AGENT);
     out.harvested = h.added;
     if (h.errors.length) out.harvest_errors = h.errors.slice(0, 3);
   }
 
   // Learn from our own good leads. Cheap: it is a DB query, not a fetch.
-  const mined = await mineCorpus(db);
-  if (mined.length) out.mined = await storeCandidates(db, mined, 'corpus');
+  const mined = await mineCorpus(db, profileId);
+  if (mined.length) out.mined = await storeCandidates(db, profileId, mined, 'corpus');
 
   // Retire terms that keep returning domains but never produce a lead.
-  const demoted = await demoteUnproductive(db);
+  const demoted = await demoteUnproductive(db, profileId);
   if (demoted.demoted) out.demoted = demoted.demoted;
 
   // Measure a few unvalidated terms per run, within the source budget.
   const toTest = Math.min(num(env, 'KEYWORDS_VALIDATED_PER_RUN', 3), budget.remaining('source'));
   if (toTest > 0 && !outOfTime()) {
     out.validated = await validateBatch(
-      db, toTest,
+      db, profileId, toTest,
       async (kw, ua) => {
         if (outOfTime()) return { domains: [], error: 'out-of-time' };
         budget.spend('source');
@@ -336,7 +345,8 @@ async function maintainVocabulary(env, db, budget, outOfTime = () => false) {
 }
 
 async function processOne(env, db, ctx) {
-  const { fetcher, budget, target, url, stats, minPrescore, minQueue } = ctx;
+  const { fetcher, budget, target, url, stats, minPrescore, minQueue, profile } = ctx;
+  const profileId = profile?.id || budget.profileId;
 
   const res = await fetcher.get(url);
   budget.spend('fetch');
@@ -344,7 +354,7 @@ async function processOne(env, db, ctx) {
 
   if (!res.ok) {
     if (target.kind === 'frontier') {
-      await markFrontier(db, target.url, res.error === 'robots-disallow' ? 'SKIPPED' : 'ERROR');
+      await markFrontier(db, profileId, target.url, res.error === 'robots-disallow' ? 'SKIPPED' : 'ERROR');
     }
     if (target.kind === 'stale' && target.row?.id) {
       // Site is down or gone. Note it, do not delete — it may come back.
@@ -397,7 +407,7 @@ async function processOne(env, db, ctx) {
     stats.merged += resolved.merged || 0;
   }
   if (!entityId) {
-    if (target.kind === 'frontier') await markFrontier(db, target.url, 'SKIPPED');
+    if (target.kind === 'frontier') await markFrontier(db, profileId, target.url, 'SKIPPED');
     return;
   }
 
@@ -416,23 +426,23 @@ async function processOne(env, db, ctx) {
   await db
     .prepare(
       `INSERT INTO snapshots
-         (id, entity_id, url, fetched_at, http_status, ok, content_hash, bytes,
-          ttfb_ms, signals, text_sample, render_mode)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+         (id, profile_id, entity_id, url, fetched_at, http_status, ok, content_hash,
+          bytes, ttfb_ms, signals, text_sample, render_mode)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .bind(
-      newId(), entityId, url, nowIso(), res.status, 1, hash, res.bytes, res.ttfb,
+      newId(), profileId, entityId, url, nowIso(), res.status, 1, hash, res.bytes, res.ttfb,
       JSON.stringify(stripLinks(signals)), signals.text_sample, renderMode
     )
     .run();
 
-  if (target.kind === 'frontier') await markFrontier(db, target.url, 'DONE');
+  if (target.kind === 'frontier') await markFrontier(db, profileId, target.url, 'DONE');
 
   // --- link-graph expansion (do this even if we skip scoring) -----------
   const depth = target.row?.depth ?? 0;
   if (depth < 3) {
     const peers = selectPeerLinks(signals, url, depth);
-    stats.frontier_added += await addToFrontier(db, peers, entityId);
+    stats.frontier_added += await addToFrontier(db, profileId, peers, entityId);
   }
 
   if (unchanged && cachedAi && entity.score != null) {
@@ -492,12 +502,17 @@ async function processOne(env, db, ctx) {
 
   // --- deterministic scoring -------------------------------------------
   const det = deterministicScore(signals, entity);
-  const niche = entity.niche || guessNiche(signals, NICHES, DEFAULT_NICHE);
+  // Classified against this profile's own vocabulary. Guessing from the global
+  // list would file a plumber under "craft_goods" — a real slug, in the wrong
+  // operation, and no error anywhere.
+  const vocab = profile?.niches && Object.keys(profile.niches).length ? profile.niches : NICHES;
+  const fallbackNiche = vocab === NICHES ? DEFAULT_NICHE : Object.keys(vocab)[0];
+  const niche = entity.niche || guessNiche(signals, vocab, fallbackNiche);
 
   // --- AI, only above the bar and only if budget allows ------------------
   let ai = cachedAi;
   if (!ai && det.prescore >= minPrescore && budget.canSpend('ai')) {
-    ai = await evaluate(env, db, { ...entity, niche }, signals, det, hash);
+    ai = await evaluate(env, db, { ...entity, niche }, signals, det, hash, profile);
     budget.spend('ai');
     stats.evaluated_ai++;
     if (ai?.error) { ai = null; stats.errors++; }
@@ -575,7 +590,7 @@ async function processOne(env, db, ctx) {
  * judgement rests on OSM tags plus one AI call, so this is cheap in fetch
  * budget and only costs AI.
  */
-async function processNoWebsite(env, db, { entity, budget, stats, minQueue }) {
+async function processNoWebsite(env, db, { entity, budget, stats, minQueue, profile }) {
   let tags = {};
   try { tags = JSON.parse(entity.osm_tags || '{}'); } catch { /* keep {} */ }
 
@@ -584,7 +599,7 @@ async function processNoWebsite(env, db, { entity, budget, stats, minQueue }) {
   const cached = await cachedEvaluation(db, entity.id, 'no-website');
   let ai = cached;
   if (!ai && budget.canSpend('ai')) {
-    ai = await evaluateNoWebsite(env, db, entity, tags);
+    ai = await evaluateNoWebsite(env, db, entity, tags, profile);
     budget.spend('ai');
     stats.evaluated_ai++;
     if (ai?.error) { ai = null; stats.errors++; }
