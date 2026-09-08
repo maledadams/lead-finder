@@ -154,6 +154,10 @@ export async function applyCorrection(env, db, entityId, note, { reviewer = 'das
     }
   }
 
+  // The old name, captured before the update overwrites it, so the emails
+  // already written about this business can be corrected too.
+  const oldName = entity.display_name || '';
+
   const fields = Object.keys(changes);
   if (fields.length) {
     changes.updated_at = nowIso();
@@ -164,6 +168,31 @@ export async function applyCorrection(env, db, entityId, note, { reviewer = 'das
     await db.prepare(
       `UPDATE entities SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`
     ).bind(...cols.map((c) => changes[c]), entityId).run();
+  }
+
+  // A renamed business is renamed in the emails as well.
+  //
+  // Correcting the record and leaving "Glasshaus Gardens — notes on your product
+  // pages" sitting in Sent is only half a correction: the history is the thing
+  // you read later, and it would still be about a business that does not exist.
+  // So the old name is substituted for the new one in every subject and body
+  // belonging to this lead, drafts and sent alike.
+  //
+  // This does edit the text of an email someone already received, which is
+  // normally something this system refuses to do. The exception is narrow and
+  // worth it: only the name is touched, nothing about the offer changes, and the
+  // name it replaces was wrong when it went out.
+  let renamed = 0;
+  if (changes.display_name && oldName.length >= 3) {
+    const res = await db.prepare(
+      `UPDATE outreach
+       SET subject = REPLACE(subject, ?, ?), body = REPLACE(body, ?, ?)
+       WHERE entity_id = ? AND (instr(subject, ?) > 0 OR instr(body, ?) > 0)`
+    ).bind(
+      oldName, changes.display_name, oldName, changes.display_name,
+      entityId, oldName, oldName
+    ).run();
+    renamed = res?.meta?.changes || 0;
   }
 
   // What a note MEANS depends on whether it changed anything.
@@ -201,6 +230,7 @@ export async function applyCorrection(env, db, entityId, note, { reviewer = 'das
   return {
     ok: true,
     changed,
+    renamed,
     kind: isCorrection ? 'correction' : 'judgement',
     reranked,
     summary: String(parsed.summary || '').slice(0, 300),

@@ -15,6 +15,15 @@ function harness(modelReply) {
       VALUES ('e1','p-creative','Glasshaus Gardens','fettlebotanic.com','https://fettlebotanic.com',
               'beauty_wellness','hello@fettlebotanic.com',63,'model rationale','EVALUATED',
               '2026-01-01','2026-01-01','2026-01-01');
+    INSERT INTO outreach (id, profile_id, entity_id, queue_date, rank, subject, body, status, created_at, sent_at)
+      VALUES ('o-sent','p-creative','e1','2026-01-05',1,
+              'Glasshaus Gardens — notes on your product pages',
+              'Hello,\n\nGlasshaus Gardens could benefit from clearer product pages.',
+              'SENT','2026-01-05','2026-01-05T10:00:00Z'),
+             ('o-draft','p-creative','e1','2026-01-08',1,
+              'Glasshaus Gardens — notes on your product pages',
+              'Hello,\n\nGlasshaus Gardens could benefit from clearer product pages.',
+              'DRAFT','2026-01-08',NULL);
     INSERT INTO snapshots (id, entity_id, url, fetched_at, ok, text_sample)
       VALUES ('s1','e1','https://fettlebotanic.com','2026-01-02',1,
               'Fettle Botanic Supply Co. Loose leaf tea, herbal blends and tisanes.');
@@ -133,4 +142,45 @@ test('the lesson query reads judgements but not corrections', async () => {
   const where = src.slice(src.indexOf('FROM feedback f'), src.indexOf('ORDER BY f.created_at'));
   assert.match(where, /NOT IN \('BOUNCED','CORRECTED'\)/);
   assert.doesNotMatch(where, /'NOTE'/, "a plain note must not be excluded — it is the ranking signal");
+});
+
+// ---------------------------------------------------------------------------
+// A correction that stops at the record is only half a correction.
+// ---------------------------------------------------------------------------
+
+test('a renamed business is renamed in the emails already written about it', async () => {
+  const h = harness({
+    display_name: 'Fettle Botanic Supply Co',
+    niche: 'food_bev',
+    contact_email: null,
+    summary: 'The site sells tea, not skincare, and is not Glasshaus Gardens.',
+  });
+  const res = await applyCorrection(h.env, h.db, 'e1',
+    "it's actually fettle botanic not glasshaus gardens, and it sells tea");
+
+  assert.equal(res.ok, true);
+  assert.equal(res.renamed, 2, 'the sent email and the draft both carried the old name');
+
+  const rows = h.raw.prepare('SELECT id, subject, body FROM outreach ORDER BY id').all();
+  for (const r of rows) {
+    assert.match(r.subject, /Fettle Botanic Supply Co/, `${r.id} subject`);
+    assert.ok(!r.subject.includes('Glasshaus'), `${r.id} still names the wrong business`);
+    assert.ok(!r.body.includes('Glasshaus'), `${r.id} body still names the wrong business`);
+  }
+
+  // Only the name moved. Nothing about the offer may be rewritten by a rename.
+  const sent = rows.find((r) => r.id === 'o-sent');
+  assert.match(sent.body, /could benefit from clearer product pages/);
+});
+
+test('an opinion leaves the sent emails exactly as they were', async () => {
+  const h = harness({
+    kind: 'opinion', display_name: null, niche: null, contact_email: null,
+    summary: 'Not the kind of business I want.',
+  });
+  const before = h.raw.prepare("SELECT subject FROM outreach WHERE id='o-sent'").get().subject;
+  const res = await applyCorrection(h.env, h.db, 'e1', 'too corporate for me');
+
+  assert.equal(res.renamed, 0);
+  assert.equal(h.raw.prepare("SELECT subject FROM outreach WHERE id='o-sent'").get().subject, before);
 });

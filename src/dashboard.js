@@ -597,18 +597,11 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
       esc(p.name)}</option>`).join('');
 
   return `<!doctype html>
-<html lang="en" data-theme="light"><head>
+<html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAzMiAzMic+PGNpcmNsZSBjeD0nMTQnIGN5PScxNCcgcj0nOC41JyBmaWxsPSdub25lJyBzdHJva2U9JyMwMDZGRUUnIHN0cm9rZS13aWR0aD0nMy4yJy8+PHBhdGggZD0nTTIwLjQgMjAuNCAyNyAyNycgc3Ryb2tlPScjMDA2RkVFJyBzdHJva2Utd2lkdGg9JzMuNicgc3Ryb2tlLWxpbmVjYXA9J3JvdW5kJy8+PC9zdmc+">
 <title>${esc(TITLES[view] || 'Leads')} — leads</title>
-<script nonce="${esc(nonce)}">
-// Before first paint, so a dark-mode user never sees a white flash.
-try {
-  var t = localStorage.getItem('lf-theme');
-  if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
-} catch (e) {}
-</script>
 <style>
   /* ---- HeroUI tokens ------------------------------------------------- */
   :root{
@@ -638,6 +631,23 @@ try {
     /* Re-stepped for the dark surface, not flipped: these are their own
        validated steps against #18181b. */
     --c1:#006FEE; --c2:#C4841D; --c3:#9353D3; --c4:#12A150; --c5:#C20E4D;
+  }
+
+  /* With the toggle gone, the operating system is what chooses. Same steps,
+     under the media query, so dark mode is reachable without a button. The
+     [data-theme] selectors above stay: they are how the choice would be
+     honoured if one is ever wanted back. */
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+    --bg:#000000; --fg:#ECEDEE;
+    --c-1:#18181b; --c-2:#27272a; --c-3:#3f3f46; --c-4:#52525b;
+    --line:#27272a; --muted:#a1a1aa; --accent:var(--p500); --accent-ink:#FFFFFF;
+    --ok:#17C964; --warn:#F5A524; --bad:#F871A0;
+    --sh-s:0 1px 2px rgba(0,0,0,.5); --sh-m:0 4px 14px rgba(0,0,0,.55);
+    /* Re-stepped for the dark surface, not flipped: these are their own
+       validated steps against #18181b. */
+    --c1:#006FEE; --c2:#C4841D; --c3:#9353D3; --c4:#12A150; --c5:#C20E4D;
+  }
   }
 
   *{box-sizing:border-box}
@@ -683,14 +693,19 @@ try {
   .nav:hover{background:var(--c-2);color:var(--fg)}
   .nav[aria-current="page"]{background:var(--p50);color:var(--p600);font-weight:600}
   :root[data-theme="dark"] .nav[aria-current="page"]{background:rgba(0,111,238,.18);color:var(--p300)}
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]) .nav[aria-current="page"]{background:rgba(0,111,238,.18);color:var(--p300)}
+  }
   .nav .n{margin-left:auto;font-size:12px;font-variant-numeric:tabular-nums;
           background:var(--c-2);color:var(--muted);padding:1px 7px;border-radius:99px}
   .nav[aria-current="page"] .n{background:var(--p100);color:var(--p700)}
   :root[data-theme="dark"] .nav[aria-current="page"] .n{background:rgba(0,111,238,.3);color:var(--p200)}
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]) .nav[aria-current="page"] .n{background:rgba(0,111,238,.3);color:var(--p200)}
+  }
   .foot{margin-top:auto;padding:12px 11px 0;font-size:12px;color:var(--muted);line-height:1.6;
         border-top:1px solid var(--line)}
   .foot b{font-variant-numeric:tabular-nums;color:var(--fg)}
-  .tog{margin:10px 0 0;width:100%;justify-content:center}
 
   .main{min-width:0;max-width:1160px;padding:26px 30px 110px}
   .head{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:20px}
@@ -751,6 +766,11 @@ try {
   button:disabled{opacity:.45;cursor:default}
   .acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center}
   .notes{display:flex;align-items:center;gap:7px;margin-left:auto;flex:1;min-width:280px;max-width:520px}
+  /* On a history row the notes belong at the right-hand end, as one group.
+     Growing to fill made them start where the buttons stop, which is why they
+     read as left-aligned no matter how much room was left over. */
+  .row .notes{flex:0 1 auto;min-width:0;justify-content:flex-end}
+  .row .npill{flex:0 1 230px;min-width:150px}
   .nlab{font-size:12.5px;color:var(--muted);white-space:nowrap}
   .nsend{padding:6px 13px;border-radius:99px;font-size:12.5px;white-space:nowrap;flex:none}
   .npill{font:inherit;font-size:13px;padding:6px 13px;border-radius:99px;
@@ -766,6 +786,9 @@ try {
 
   .drawer{display:none;margin-top:12px}
   .drawer.open{display:block}
+  /* An email field sized to an email. Full width made a 21-character address
+     sit in a box the width of the page. */
+  .drawer input[data-field="email"]{width:24ch;max-width:100%}
   .drawer input,.drawer textarea{width:100%;font:inherit;font-size:13.5px;
     padding:10px 12px;border-radius:var(--r-m);border:1px solid var(--line);
     background:var(--c-2);color:var(--fg)}
@@ -858,7 +881,6 @@ try {
     .psel{padding:0;margin:0;border:0;flex:none}
     .plab{display:none}
     .nav .n{margin-left:6px}
-    .tog{margin:0 0 0 auto;width:auto}
     .main{padding:18px 16px 90px}
     .row{grid-template-columns:1fr} .rmeta{text-align:left}
     .grid.stats{grid-template-columns:1fr}
@@ -889,9 +911,6 @@ try {
     <button id="pcreate" type="button" class="go sm">Create</button>
   </details>
 
-  <button class="tog" id="theme" type="button" aria-label="Switch between light and dark">
-    <span id="themelabel">Dark</span>
-  </button>
   <div class="foot">
     <b>${counts.contacted || 0}</b> contacted all time<br>
     ${sending?.connected
@@ -928,18 +947,6 @@ async function post(path, body){
 const holder = (el) => el.closest('.card, .row');
 const field = (el, name) => holder(el).querySelector('[data-field="' + name + '"]');
 
-// Light is the default; dark is a choice this browser remembers.
-const label = document.getElementById('themelabel');
-const paint = () => { label.textContent =
-  document.documentElement.dataset.theme === 'dark' ? 'Light' : 'Dark'; };
-paint();
-document.getElementById('theme').addEventListener('click', () => {
-  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem('lf-theme', next); } catch (e) {}
-  paint();
-});
-
 // The filter bar cannot be a <form>: the CSP sets form-action 'none' so that a
 // hostile lead name can never become a submission target. Navigating by hand
 // costs three lines and keeps that directive tight.
@@ -964,6 +971,10 @@ async function sendNote(el){
     let said;
     if (res.changed?.length) {
       said = 'Fixed ' + res.changed.join(' and ').replace(/_/g, ' ') + ' — rescoring';
+      // Say so when the old name was also cleaned out of the emails, or the
+      // Sent page appears to have ignored the correction until it reloads.
+      if (res.renamed) said += ', renamed in ' + res.renamed +
+        (res.renamed === 1 ? ' email' : ' emails');
     } else if (res.reranked) {
       // A judgement, not a correction. Say what it moved so it never looks
       // like nothing happened.
@@ -1037,7 +1048,7 @@ if (create) create.addEventListener('click', async () => {
 
 document.addEventListener('click', async (ev) => {
   const b = ev.target.closest('button');
-  if(!b || b.id === 'theme') return;
+  if(!b) return;
   const card = holder(b);
   const id = card && card.dataset.oid;
 
