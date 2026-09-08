@@ -385,4 +385,9 @@ A fresh install needs only `schema.sql`, which is complete on its own.
 
 ## Licence
 
-No licence is granted by default. Add one before publishing a fork.
+[MIT](LICENSE). Use it, change it, run it commercially — just keep the copyright
+notice.
+
+The licence covers the software only. Complying with CAN-SPAM, GDPR, PECR and
+anything else that governs the email you send with it is the operator's
+responsibility, not the licence's.
