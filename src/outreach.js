@@ -107,7 +107,7 @@ function buildBody({ env, persona, name, greeting, benefit, why, fix, closing })
     why ? '' : null,
     why ? sentence(why) : null,
     fix ? '' : null,
-    fix ? `The fix is ${lowerFirst(fix)}.` : null,
+    fix ? `Fixing it means ${lowerFirst(fix)}.` : null,
     '',
     closing,
     signature(env),
@@ -116,7 +116,11 @@ function buildBody({ env, persona, name, greeting, benefit, why, fix, closing })
 }
 
 /** What to do if they want it looked at. Never a promise, never a deadline. */
-const CLOSING = 'If that is something you would want sorted, reply and I will take a proper look. If not, no hard feelings — I will not chase.';
+const CLOSING = [
+  'If any of that is worth doing, reply and I will take a proper look at the site and come back with what I would actually change.',
+  'And if you would rather talk it through than read about it, I am happy to jump on a short call — whenever suits you.',
+  'If it is not a priority right now, no hard feelings. I will not chase.',
+].join('\n\n');
 
 /**
  * Compose a draft. Returns null when there is nothing honest to say.
@@ -158,7 +162,7 @@ export function composeDraft(entity, env) {
     liked: p.liked,
     benefit: benefitOf(opportunity),
     why,
-    fix: fixFor(opportunity),
+    fix: fixFor(opportunity) || GENERIC_FIX,
     closing: CLOSING,
   });
 
@@ -372,21 +376,47 @@ export function benefitOf(rawFinding) {
  * Deliberately describes the work, never a promise about doing it.
  */
 const FIX = [
-  [/no mobile viewport meta.*/i, 'a layout rebuild rather than a setting — bigger than a tweak, but a known quantity'],
-  [/entire web presence is a single-page link site/i, 'a small proper site — a few pages, your own domain, somewhere to actually buy'],
-  [/(\d+) images with no lazy-loading or srcset.*/i, 'serving the right image size per device, which is a build change rather than a redesign'],
-  [/images have no width\/height.*/i, 'reserving the space each image will take before it loads, so nothing shifts'],
-  [/copyright still reads (\d{4})/i, 'a five-minute change, and worth doing today whoever does it'],
-  [/almost no copy.*/i, 'a short page in your own words about how you work and why'],
-  [/no meta description/i, 'writing the sentence you want people to read in search results'],
-  [/(\w+) template with limited design control/i, 'either a custom theme or a build that is not fighting the template'],
-  [/orders taken manually by DM or email.*/i, 'a real checkout, so orders arrive as orders instead of as messages'],
-  [/sells sessions or commissions with no booking flow.*/i, 'a booking page wired to your calendar, so people can book without asking first'],
-  [/wholesale\/stockist programme with no ordering portal/i, 'a stockist login with your trade prices behind it'],
-  [/selling online with no email capture/i, 'somewhere to leave an address, and a reason to leave it'],
-  [/runs events\/pop-ups.*/i, 'a page that lists them and takes sign-ups without you doing it by hand'],
-  [/large catalogue with no reviews\/retention tooling/i, 'reviews on the product pages and something that brings buyers back'],
+  [/no mobile viewport meta.*/i,
+    'the layout has to be rebuilt to respond to the screen rather than assume a desktop one. That is real work, not a setting, but it is bounded: the same pages and the same content, laid out so they hold together from a phone up to a monitor. Most of the benefit lands the day it ships, because the majority of your visitors are already on a phone'],
+  [/entire web presence is a single-page link site/i,
+    'a small proper site is enough. A few pages on your own domain, somewhere to actually buy or enquire, and the link page kept as the thing that points at it. You keep every audience you already have and stop losing the ones who wanted to go further'],
+  [/(\d+) images with no lazy-loading or srcset.*/i,
+    'the images get served at the size the device actually needs, and anything below the fold waits until it is scrolled to. It is a build change rather than a redesign, so nothing about how the site looks has to change. The page simply starts appearing in about a third of the time on a phone'],
+  [/images have no width\/height.*/i,
+    'each image gets its dimensions declared so the browser reserves the space before the file arrives. Nothing then jumps as things load. It is a small, contained change and it is the difference between a page that feels considered and one that feels like it is still assembling itself'],
+  [/copyright still reads (\d{4})/i,
+    'that one is a five-minute change and worth doing today, whoever does it. Worth a wider look at the same time, though, because a footer that has gone stale usually means other things on the site have too'],
+  [/almost no copy.*/i,
+    'a short page in your own words about how you work and why, and a line or two of context wherever someone is deciding. It does not need to be long and it should not read like marketing. People buying from an independent maker want to know who they are buying from, and right now the site does not tell them'],
+  [/no meta description/i,
+    'writing the sentence you actually want people to read when you come up in search, for the handful of pages that matter. It takes an afternoon and it is the first thing anyone reads about you, whether or not you chose it'],
+  [/(\w+) template with limited design control/i,
+    'either a custom theme or a build that is not fighting the template. Keeping the platform is usually fine — the constraint is the theme, not the host — so this is often less disruptive than it sounds, and your product data and orders stay exactly where they are'],
+  [/orders taken manually by DM or email.*/i,
+    'a real checkout, so an order arrives as an order with the address and the payment already attached. Stock, confirmations and receipts stop being something you do by hand. You keep the conversations you want to have and stop being required to have the ones you do not'],
+  [/sells sessions or commissions with no booking flow.*/i,
+    'a booking page wired to your real calendar, showing only the times you actually want to offer, taking a deposit if you want one. Someone who is ready can book at eleven at night without waiting for you to reply. You stop losing the people whose enthusiasm does not survive a two-day wait'],
+  [/wholesale\/stockist programme with no ordering portal/i,
+    'a stockist login with your trade prices and minimums behind it, so a shop can reorder without emailing you and waiting. Wholesale is usually the highest-value channel and the one most likely to repeat, and it is currently the one running entirely through your inbox'],
+  [/selling online with no email capture/i,
+    'somewhere to leave an address and an actual reason to leave it — early access to a drop, or first sight of new work. Then something sent occasionally enough that people stay subscribed. Most people who visit are not ready to buy that day, and right now every one of them leaves without a trace'],
+  [/runs events\/pop-ups.*/i,
+    'a page that lists what is coming and takes sign-ups on its own, with the list going somewhere you can actually use afterwards. The admin around each event stops being rebuilt from scratch every time, and you find out who is coming before the day'],
+  [/large catalogue with no reviews\/retention tooling/i,
+    'reviews on the product pages, and something simple that brings past buyers back — a note when the thing they liked returns, or when the range they bought from grows. With a catalogue that size the hardest problem is helping someone choose, and other buyers do that better than you can'],
 ];
+
+/**
+ * What to say when a finding has no mapped explanation.
+ *
+ * Findings come from the model as well as the detector, so there will always be
+ * ones this table has never seen. Without a fallback those emails lost their
+ * whole third paragraph and arrived at about half the length — a problem
+ * asserted and then dropped, which reads as thinner than saying nothing. This
+ * is deliberately about the shape of the work rather than the specifics, since
+ * the specifics are the part we do not have.
+ */
+const GENERIC_FIX = 'scoping it properly first: what is there now, what it should do instead, and the shortest route between the two. Work like this is usually more contained than it looks once someone has written it down, and knowing the size of it costs nothing';
 
 /** How the finding would be fixed, or null when there is nothing specific to say. */
 export function fixFor(rawFinding) {

@@ -233,13 +233,14 @@ test('nothing is promised and nothing is offered for free', async () => {
     assert.doesNotMatch(d.body, promise, `must not promise: ${promise}`);
   }
   assert.match(d.body, /reply and I will take a proper look/);
+  assert.match(d.body, /happy to jump on a short call/, 'the meeting offer');
 });
 
 test('every email states the problem, the cost, and the fix', async () => {
   const d = await draftFor('orders taken manually by DM or email');
   assert.match(d.body, /could benefit from a proper checkout/, 'the problem, as an upside');
   assert.match(d.body, /Every order costs you a conversation/, 'what it costs them now');
-  assert.match(d.body, /The fix is a real checkout/, 'what fixing it involves');
+  assert.match(d.body, /Fixing it means a real checkout/, 'what fixing it involves');
 });
 
 test('no draft compliments the recipient, however good the material', () => {
@@ -266,4 +267,30 @@ test('a business with no website gets the same shape', async () => {
   assert.match(d.body, /Halcyon Bindery could benefit from a site of its own/);
   assert.doesNotMatch(d.body, /free/i);
   assert.match(d.body, /reply and I will take a proper look/);
+});
+
+test('every draft explains the fix and offers a call', async () => {
+  const { composeDraft } = await import('../src/outreach.js');
+  const findings = [
+    'orders taken manually by DM or email',
+    'no mobile viewport meta tag present',
+    'selling online with no email capture',
+    // Findings also come from the model, so there will always be ones the FIX
+    // table has never seen. Those used to lose the whole paragraph and arrive
+    // at half the length.
+    'something the detector has never produced before',
+  ];
+  for (const opp of findings) {
+    const d = composeDraft({
+      id: 'e1', display_name: 'Here We Go Again', contact_email: 'a@b.co',
+      niche: 'craft_goods', website_opportunity: opp, personalization: '{}',
+    }, env);
+    const msg = d.body.split('\nIf this is not relevant')[0];
+
+    assert.match(msg, /Fixing it means /, `${opp} must explain the fix`);
+    assert.ok(msg.split(/\s+/).length >= 150, `${opp} must not read as thin`);
+    assert.match(msg, /happy to jump on a short call/, `${opp} must offer a call`);
+    assert.doesNotMatch(msg, /means [A-Z]/, 'no capital mid-sentence');
+    assert.doesNotMatch(msg, /\.\s*\./, 'no doubled full stop');
+  }
 });
