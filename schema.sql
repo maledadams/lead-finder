@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS entities (
   has_website        INTEGER,          -- 1 | 0 | NULL (unknown)
   -- Added by migration 005. Separate from score_reason on purpose: that column
   -- holds the model's rationale and a skip note must not overwrite it.
-  skip_reason        TEXT
+  skip_reason        TEXT,
+  profile_id   TEXT              -- migration 008
 );
 
 -- state is the hot filter on every queue build.
@@ -75,10 +76,12 @@ CREATE INDEX IF NOT EXISTS idx_entities_has_website ON entities(has_website);
 -- entering as four leads via site + Instagram + TikTok + Etsy.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS entity_keys (
-  key        TEXT PRIMARY KEY,         -- e.g. "domain:cutebrand.com"
+  profile_id TEXT NOT NULL,            -- dedup is per profile, see migration 008
+  key        TEXT NOT NULL,            -- e.g. "domain:cutebrand.com"
   kind       TEXT NOT NULL,            -- domain | instagram | tiktok | etsy | email | name
   entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (profile_id, key)
 );
 
 CREATE INDEX IF NOT EXISTS idx_entity_keys_entity ON entity_keys(entity_id);
@@ -102,7 +105,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
   ttfb_ms        INTEGER,
   signals        TEXT,                 -- JSON, see src/extract.js
   text_sample    TEXT,
-  render_mode    TEXT                  -- static | browser (migration 002)
+  render_mode    TEXT,                  -- static | browser (migration 002)
+  profile_id   TEXT              -- migration 008
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_entity ON snapshots(entity_id, fetched_at DESC);
@@ -119,7 +123,8 @@ CREATE TABLE IF NOT EXISTS evaluations (
   model         TEXT,
   created_at    TEXT NOT NULL,
   result        TEXT NOT NULL,         -- JSON, see src/ai.js
-  neurons_est   REAL
+  neurons_est   REAL,
+  profile_id  TEXT              -- migration 008
 );
 
 CREATE INDEX IF NOT EXISTS idx_evaluations_entity ON evaluations(entity_id, created_at DESC);
@@ -132,7 +137,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_evaluations_hash ON evaluations(entity_id,
 -- "brands we love", collabs, press). Following that graph propagates taste.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS crawl_frontier (
-  url          TEXT PRIMARY KEY,
+  profile_id   TEXT NOT NULL,
+  url          TEXT NOT NULL,
   domain       TEXT NOT NULL,
   depth        INTEGER NOT NULL DEFAULT 0,
   parent_entity TEXT,
@@ -140,10 +146,11 @@ CREATE TABLE IF NOT EXISTS crawl_frontier (
   priority     INTEGER NOT NULL DEFAULT 0,
   status       TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING | DONE | SKIPPED | ERROR
   added_at     TEXT NOT NULL,
-  processed_at TEXT
+  processed_at TEXT,
+  PRIMARY KEY (profile_id, url)
 );
 
-CREATE INDEX IF NOT EXISTS idx_frontier_status ON crawl_frontier(status, priority DESC, added_at);
+CREATE INDEX IF NOT EXISTS idx_frontier_status ON crawl_frontier(profile_id, status, priority DESC, added_at);
 CREATE INDEX IF NOT EXISTS idx_frontier_domain ON crawl_frontier(domain);
 
 -- ---------------------------------------------------------------------------
@@ -168,7 +175,8 @@ CREATE TABLE IF NOT EXISTS outreach (
   sent_via     TEXT,
   send_error   TEXT,
   bounced_at   TEXT,
-  edited_at    TEXT
+  edited_at    TEXT,
+  profile_id   TEXT              -- migration 008
 );
 
 CREATE INDEX IF NOT EXISTS idx_outreach_entity ON outreach(entity_id, created_at DESC);
@@ -201,10 +209,11 @@ CREATE TABLE IF NOT EXISTS suppressions (
 -- every fetch and every AI call.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS budget (
+  profile_id TEXT NOT NULL,            -- per profile, so one cannot starve another
   day        TEXT NOT NULL,
   metric     TEXT NOT NULL,
   used       INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (day, metric)
+  PRIMARY KEY (profile_id, day, metric)
 );
 
 -- ---------------------------------------------------------------------------
@@ -217,7 +226,8 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at  TEXT NOT NULL,
   finished_at TEXT,
   stats       TEXT,                    -- JSON
-  error       TEXT
+  error       TEXT,
+  profile_id  TEXT              -- migration 008
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
@@ -230,10 +240,12 @@ CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
 -- yield leads so the list can be pruned.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS source_cursor (
-  keyword     TEXT PRIMARY KEY,
+  profile_id  TEXT NOT NULL,
+  keyword     TEXT NOT NULL,
   last_run_at TEXT,
   total_found INTEGER NOT NULL DEFAULT 0,
-  runs        INTEGER NOT NULL DEFAULT 0
+  runs        INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (profile_id, keyword)
 );
 
 CREATE INDEX IF NOT EXISTS idx_source_cursor_run ON source_cursor(last_run_at);
@@ -247,7 +259,8 @@ CREATE INDEX IF NOT EXISTS idx_source_cursor_run ON source_cursor(last_run_at);
 -- a term that never returns certificates stops being queried.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS keywords (
-  keyword      TEXT PRIMARY KEY,
+  profile_id   TEXT NOT NULL,
+  keyword      TEXT NOT NULL,
   niche        TEXT,
   source       TEXT NOT NULL,          -- seed | wikipedia:<page> | corpus
   status       TEXT NOT NULL DEFAULT 'UNVALIDATED', -- UNVALIDATED | ACTIVE | DEAD
@@ -256,11 +269,12 @@ CREATE TABLE IF NOT EXISTS keywords (
   leads_found  INTEGER NOT NULL DEFAULT 0,
   last_run_at  TEXT,
   runs         INTEGER NOT NULL DEFAULT 0,
-  added_at     TEXT NOT NULL
+  added_at     TEXT NOT NULL,
+  PRIMARY KEY (profile_id, keyword)
 );
 
-CREATE INDEX IF NOT EXISTS idx_keywords_status ON keywords(status, last_run_at);
-CREATE INDEX IF NOT EXISTS idx_keywords_niche  ON keywords(niche);
+CREATE INDEX IF NOT EXISTS idx_keywords_status ON keywords(profile_id, status, last_run_at);
+CREATE INDEX IF NOT EXISTS idx_keywords_niche  ON keywords(profile_id, niche);
 
 
 -- ---------------------------------------------------------------------------
@@ -281,7 +295,8 @@ CREATE TABLE IF NOT EXISTS feedback (
   score_at_time INTEGER,
   niche_at_time TEXT,
   created_at    TEXT NOT NULL,
-  applied       INTEGER NOT NULL DEFAULT 0  -- folded into lessons yet?
+  applied       INTEGER NOT NULL DEFAULT 0,  -- folded into lessons yet?
+  profile_id  TEXT              -- migration 008
 );
 
 CREATE INDEX IF NOT EXISTS idx_feedback_entity   ON feedback(entity_id);
@@ -300,7 +315,8 @@ CREATE TABLE IF NOT EXISTS lessons (
   source_count INTEGER NOT NULL DEFAULT 1,
   active       INTEGER NOT NULL DEFAULT 1,
   created_at   TEXT NOT NULL,
-  updated_at   TEXT NOT NULL
+  updated_at   TEXT NOT NULL,
+  profile_id  TEXT              -- migration 008
 );
 
 CREATE INDEX IF NOT EXISTS idx_lessons_active ON lessons(active, weight DESC);
@@ -346,3 +362,37 @@ CREATE TABLE IF NOT EXISTS bounce_seen (
 );
 
 CREATE INDEX IF NOT EXISTS idx_bounce_seen_at ON bounce_seen(seen_at);
+
+-- ---------------------------------------------------------------------------
+-- profiles — separate outreach operations sharing one deployment (migration 008)
+--
+-- Switching profile should feel like switching account: leads, drafts, replies,
+-- lessons, keywords, frontier, spend and every metric belong to exactly one
+-- profile and are never mixed. The plumbing is shared — one mailbox, one
+-- Cloudflare account, one database, one booking calendar — and so are
+-- suppressions, because an opt-out is a person's wish rather than a profile's
+-- preference, and mx_cache, because a domain either accepts mail or does not.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS profiles (
+  id            TEXT PRIMARY KEY,
+  slug          TEXT NOT NULL UNIQUE,        -- url-safe, used in links
+  name          TEXT NOT NULL,
+  active        INTEGER NOT NULL DEFAULT 1,
+  is_default    INTEGER NOT NULL DEFAULT 0,  -- which one loads first
+  brief         TEXT,   -- what a person wrote; everything below derives from it
+  ai_system     TEXT,   -- the scoring brief the model is judged against
+  niches        TEXT,   -- {slug: {label, keywords[], signals[]}}
+  personas      TEXT,   -- {niche: {label, subject, context}}
+  seed_keywords TEXT,   -- [] bootstrap terms for discovery
+  metros        TEXT,   -- [] where to look, for local businesses
+  budgets       TEXT,   -- {fetch, ai, source, browser} per day
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_profiles_active ON profiles(active, is_default);
+
+CREATE INDEX IF NOT EXISTS idx_entities_profile ON entities(profile_id, state);
+CREATE INDEX IF NOT EXISTS idx_outreach_profile ON outreach(profile_id, queue_date);
+CREATE INDEX IF NOT EXISTS idx_feedback_profile ON feedback(profile_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_lessons_profile  ON lessons(profile_id, active, weight DESC);
