@@ -39,7 +39,7 @@ custom_domain = true
 binding = "DB"
 database_name = "lead-finder"
 # Replace with the id printed by `npm run db:create`.
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "e8410da3-3981-428c-ba18-d5995825811e"  # replace with your own: `wrangler d1 create`
 
 [ai]
 binding = "AI"
