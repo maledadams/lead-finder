@@ -124,7 +124,7 @@ test('need uses the better of website and system, never website alone', () => {
 });
 
 test('a bad website with no money signals does not score well', () => {
-  // The failure mode the megaprompt calls out: bad site != good lead.
+  // The failure mode that matters here: a bad site is not the same as a good lead.
   const poor = extractSignals(
     `<html><body><p>${'my art page. '.repeat(60)}</p><footer>© 2018</footer></body></html>`,
     'https://x.com'
