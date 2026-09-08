@@ -56,12 +56,17 @@ export async function recordFeedback(db, { entityId, outreachId, decision, reaso
  * pattern across several rejections, which is also what makes it cheap.
  */
 export async function deriveLessons(env, db, { minBatch = 3, limit = 25 } = {}) {
+  // BOUNCED is excluded on purpose. A bounce is a fact about an address, not a
+  // judgement about the business, and its reason text ("mailer-daemon: user
+  // unknown") would otherwise be handed to the model as if it were a reviewer
+  // explaining why a lead was bad.
   const { results } = await db
     .prepare(
       `SELECT f.id, f.decision, f.reason, f.niche_at_time, f.score_at_time,
               e.display_name, e.website, e.website_opportunity, e.system_opportunity
        FROM feedback f JOIN entities e ON e.id = f.entity_id
        WHERE f.applied = 0 AND f.reason IS NOT NULL AND length(f.reason) > 3
+         AND f.decision <> 'BOUNCED'
        ORDER BY f.created_at LIMIT ?`
     )
     .bind(limit)

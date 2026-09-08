@@ -132,6 +132,7 @@ export function composeDraft(entity, env) {
 
   const finding = plainEnglish(opportunity);
   const why = consequenceOf(finding);
+  const benefit = benefitOf(opportunity);
 
   const body = [
     greeting,
@@ -140,14 +141,14 @@ export function composeDraft(entity, env) {
     '',
     `I'm Lucía Adams. ${persona.context}`,
     '',
-    why
-      ? `Looking at your site, one thing stood out: ${lowerFirst(finding)}. ${sentence(why)}`
-      : `Looking at your site, one thing stood out: ${lowerFirst(finding)}.`,
+    benefit
+      ? `Looking at your site, ${name} could benefit from ${lowerFirst(benefit)}.${why ? ` ${sentence(why)}` : ''}`
+      : `Looking at your site, one thing stood out: ${lowerFirst(finding)}.${why ? ` ${sentence(why)}` : ''}`,
     '',
     `If it would be useful, I can put together ${persona.offer} — free, and with no expectation that you work with me afterwards.`,
     '',
     'Would you like me to send it over this week?',
-    signature(),
+    signature(env),
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
@@ -174,6 +175,7 @@ function composeObservationDraft(entity, env, persona, opportunity) {
 
   const finding = plainEnglish(opportunity);
   const why = consequenceOf(finding);
+  const benefit = benefitOf(opportunity);
 
   const body = [
     greeting,
@@ -182,14 +184,14 @@ function composeObservationDraft(entity, env, persona, opportunity) {
     '',
     `I'm Lucía Adams. ${persona.context}`,
     '',
-    why
-      ? `One thing stood out: ${lowerFirst(finding)}. ${sentence(why)}`
-      : `One thing stood out: ${lowerFirst(finding)}.`,
+    benefit
+      ? `${name} could benefit from ${lowerFirst(benefit)}.${why ? ` ${sentence(why)}` : ''}`
+      : `One thing stood out: ${lowerFirst(finding)}.${why ? ` ${sentence(why)}` : ''}`,
     '',
     `If it would be useful, I can put together ${persona.offer} — free, and with no expectation that you work with me afterwards.`,
     '',
     'Would you like me to send it over this week?',
-    signature(),
+    signature(env),
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
@@ -237,7 +239,7 @@ function composeNoWebsiteDraft(entity, env, persona) {
     'If it would be useful, I can put together a rough idea of what a site could look like for you — free, and with no expectation that you work with me afterwards.',
     '',
     'Would you like me to send it over this week?',
-    signature(),
+    signature(env),
     canSpamFooter(env),
   ].filter((l) => l !== undefined && l !== null).join('\n');
 
@@ -257,7 +259,7 @@ function composeNoWebsiteDraft(entity, env, persona) {
  * end with "— lucia" immediately followed by "Lucía Adams".
  */
 /**
- * No signature in the draft body.
+ * The sign-off that goes above the CAN-SPAM footer.
  *
  * The mail client appends the real one. Two signatures in a single email is
  * the clearest possible tell that the message was machine-assembled, which is
@@ -266,8 +268,14 @@ function composeNoWebsiteDraft(entity, env, persona) {
  * The CAN-SPAM footer is separate and still required — a postal address and a
  * working opt-out are legal obligations, not a sign-off.
  */
-function signature() {
-  return null;
+function signature(env) {
+  // The Zoho firma is NOT added here. It is fetched from Zoho and appended at
+  // send time (see sendMail), because that is the only way the real one — the
+  // account's own default — reaches the recipient: Zoho's API does not attach
+  // the webmail signature to messages posted through it, which is why sent
+  // mail was arriving without it.
+  const name = env?.SENDER_NAME || 'Lucía Adams';
+  return `\nBest,\n${name}`;
 }
 
 const sentence = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) + '.' : '');
@@ -325,6 +333,54 @@ export function isSpecificCompliment(text) {
  * worse than saying nothing: it reads as jargon, or as a bot. These are the
  * same facts in the language the recipient actually uses.
  */
+/**
+ * The same findings, said as the thing they would GAIN.
+ *
+ * PLAIN_ENGLISH describes what is wrong ("there is no way to book you from the
+ * site"), which reads correctly after "one thing stood out:" but becomes
+ * nonsense after "could benefit from". Naming the business and the upside is
+ * warmer and more human, so each finding gets a positive phrasing here. Keyed
+ * by the same raw patterns, so the two tables stay in step.
+ *
+ * Anything unmatched falls back to the observation sentence rather than being
+ * forced into a frame it does not fit — a broken sentence is worse than a
+ * plainer one.
+ */
+const BENEFIT = [
+  [/no mobile viewport meta.*/i, 'a site that actually works properly on phones'],
+  [/entire web presence is a single-page link site/i, 'a proper site of its own rather than a single link page'],
+  [/(\d+) images with no lazy-loading or srcset.*/i, 'images that load properly on mobile instead of at full size'],
+  [/images have no width\/height.*/i, 'a page that does not jump around while the images load'],
+  [/copyright still reads (\d{4})/i, 'a footer that no longer says $1'],
+  [/almost no copy.*/i, 'something on the site about who you are'],
+  [/no meta description/i, 'a description of its own, so search results say what you want them to'],
+  [/(\w+) template with limited design control/i, 'a site that is not boxed in by a $1 template'],
+  [/orders taken manually by DM or email.*/i, 'a proper checkout instead of taking orders through DMs'],
+  [/sells sessions or commissions with no booking flow.*/i, 'a way for people to book you straight from the site'],
+  [/wholesale\/stockist programme with no ordering portal/i, 'an ordering portal, so stockists do not have to email you'],
+  [/selling online with no email capture/i, 'a way to keep in touch with people who are not ready to buy yet'],
+  [/runs events\/pop-ups.*/i, 'a way to run events and pop-ups without handling each one by hand'],
+  [/large catalogue with no reviews\/retention tooling/i, 'something that brings customers back to a catalogue that size'],
+];
+
+/**
+ * The upside of a finding, or null when there is no honest way to phrase it.
+ *
+ * Takes the RAW opportunity, not the plain-English version, so it matches the
+ * same patterns PLAIN_ENGLISH does.
+ */
+export function benefitOf(rawFinding) {
+  if (!rawFinding) return null;
+  const t = String(rawFinding).trim();
+  for (const [rx, phrase] of BENEFIT) {
+    if (rx.test(t)) return t.replace(rx, phrase);
+  }
+  // A plainly negative phrase ("no online ordering") carries its own positive.
+  const stripped = t.replace(/^(?:there is |they have |the site has )?(?:no|missing|lacks|lacking|without)\s+/i, '');
+  if (stripped !== t && stripped.length > 2) return stripped;
+  return null;
+}
+
 const PLAIN_ENGLISH = [
   [/no mobile viewport meta.*/i, 'the site was never set up to work properly on phones'],
   [/entire web presence is a single-page link site/i, 'everything lives on one link page, which is doing your work a disservice'],
@@ -418,6 +474,43 @@ export function stripControl(s) {
     .replace(/[\u0000-\u001f\u007f]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * The same idea for a message BODY, where line breaks are the content.
+ *
+ * stripControl() must never be used on a body: it collapses \s+ to a single
+ * space, which would flatten a whole email onto one line. Here CR and the other
+ * control characters still go, \n survives, trailing spaces are trimmed per
+ * line, and a run of blank lines is capped at one so an edited draft cannot
+ * grow unbounded whitespace.
+ */
+export function stripControlKeepLines(s) {
+  return String(s ?? '')
+    .replace(/\r\n?/g, '\n')
+    // Every control character except \n (\u000a), which is the content here.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, ' ')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/, ''))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Does this body still carry the two things CAN-SPAM requires?
+ *
+ * A reviewer editing a draft can delete the footer without realising it is not
+ * decoration. Sending without it is illegal, so the edit endpoint puts it back
+ * rather than trusting that nobody will.
+ */
+export function hasCanSpamFooter(body, env) {
+  const text = String(body || '');
+  const addr = env?.SENDER_POSTAL_ADDRESS;
+  const hasOptOut = /reply and let me know|will not write again|unsubscribe/i.test(text);
+  const hasAddress = Boolean(addr) && text.includes(addr);
+  return hasOptOut && hasAddress;
 }
 
 const firstName = (n) => String(n).trim().split(/\s+/)[0];

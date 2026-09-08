@@ -26,6 +26,16 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
     no_contact_method: 0, no_honest_draft: 0, queued: 0, cooldown_days: 0,
   };
 
+  // Age out anyone who never answered, before today's list is built, so the
+  // dashboard's counts are true the moment it is opened.
+  if (!dryRun) {
+    try {
+      stats.ghosting = await sweepGhosted(db, num(env, 'GHOST_AFTER_DAYS', 30));
+    } catch (err) {
+      stats.ghosting = { error: String(err?.message || err).slice(0, 120) };
+    }
+  }
+
   if (!dryRun) {
     await db.prepare('INSERT INTO runs (id, kind, started_at) VALUES (?,?,?)')
       .bind(runId, 'queue', startedAt).run();
@@ -227,6 +237,189 @@ export async function markSkipped(db, outreachId, reason = 'manual-skip') {
     ).bind(`skipped: ${reason}`.slice(0, 200), nowIso(), row.entity_id),
   ]);
   return { ok: true };
+}
+
+/**
+ * The address was wrong. The business was not.
+ *
+ * A bounce says nothing about whether this company is worth contacting, so it
+ * must not be treated as a rejection. What it does mean is that the address we
+ * hold is dead, and that we must never adopt that same address again.
+ *
+ * Two behaviours that already exist do the rest, which is why this needs no new
+ * state and no scheduler:
+ *
+ *   pipeline.js  contact_email = COALESCE(contact_email, ?)  -- only fills NULL
+ *   queue.js:93  if (!e.contact_email) continue;             -- NULL = unqueueable
+ *
+ * So: null the address, park the dead one in `suppressions`, and hand the lead
+ * back to NURTURE. It leaves the roster now and returns by itself once a
+ * re-crawl finds a DIFFERENT address.
+ *
+ * Deliberately NOT routed through suppress() below: that sets DO_NOT_CONTACT,
+ * which is permanent and would be exactly the wrong answer here.
+ */
+export async function markBounced(db, outreachId, note = 'bounced') {
+  const row = await db
+    .prepare(
+      `SELECT o.entity_id, o.status, e.contact_email
+       FROM outreach o JOIN entities e ON e.id = o.entity_id
+       WHERE o.id = ?`
+    )
+    .bind(outreachId)
+    .first();
+  if (!row) return { ok: false, error: 'not-found' };
+
+  const ts = nowIso();
+  const dead = row.contact_email;
+
+  const statements = [
+    db.prepare(
+      "UPDATE outreach SET status = 'BOUNCED', bounced_at = ?, send_error = ? WHERE id = ?"
+    ).bind(ts, `bounced: ${note}`.slice(0, 300), outreachId),
+  ];
+
+  // Belt and braces against re-adopting the same dead address: the crawler is
+  // deterministic, so left alone it would very likely pick this one again.
+  if (dead) {
+    statements.push(
+      db.prepare('INSERT OR REPLACE INTO suppressions (key, reason, created_at) VALUES (?,?,?)')
+        .bind(dead, `bounced: ${note}`.slice(0, 200), ts)
+    );
+  }
+
+  // The CASE guards real history. Statement 1 above has already moved THIS row
+  // off 'SENT', so the subquery can only see some OTHER successful send to the
+  // same business — and if one exists, this company genuinely has been
+  // contacted and those timestamps must survive.
+  statements.push(
+    db.prepare(
+      `UPDATE entities SET
+         contact_email = NULL,
+         contact_source = NULL,
+         state = 'NURTURE',
+         first_contacted_at = CASE WHEN NOT EXISTS
+           (SELECT 1 FROM outreach WHERE entity_id = ? AND status = 'SENT')
+           THEN NULL ELSE first_contacted_at END,
+         last_contacted_at = CASE WHEN NOT EXISTS
+           (SELECT 1 FROM outreach WHERE entity_id = ? AND status = 'SENT')
+           THEN NULL ELSE last_contacted_at END,
+         updated_at = ?
+       WHERE id = ?`
+    ).bind(row.entity_id, row.entity_id, ts, row.entity_id)
+  );
+
+  await db.batch(statements);
+  return { ok: true, entity_id: row.entity_id, cleared: dead || null };
+}
+
+/**
+ * Put a skipped or bounced draft back into today's queue so it can be edited
+ * and sent.
+ *
+ * `idx_outreach_unique (entity_id, queue_date)` means this collides if the
+ * business already has a draft today, hence OR IGNORE plus a changes check —
+ * silently doing nothing would look like a broken button.
+ */
+export async function revive(db, outreachId) {
+  const row = await db
+    .prepare('SELECT entity_id, status FROM outreach WHERE id = ?')
+    .bind(outreachId)
+    .first();
+  if (!row) return { ok: false, error: 'not-found' };
+  if (row.status === 'SENT') return { ok: false, error: 'already-sent' };
+
+  const day = todayStr();
+  const top = await db
+    .prepare('SELECT COALESCE(MAX(rank), 0) AS r FROM outreach WHERE queue_date = ?')
+    .bind(day)
+    .first();
+
+  const res = await db
+    .prepare(
+      `UPDATE OR IGNORE outreach
+         SET status = 'DRAFT', queue_date = ?, rank = ?, sent_at = NULL, bounced_at = NULL
+       WHERE id = ?`
+    )
+    .bind(day, (top?.r || 0) + 1, outreachId)
+    .run();
+
+  if (!res?.meta?.changes) {
+    return { ok: false, error: 'already-queued-today' };
+  }
+
+  await db
+    .prepare(
+      `UPDATE entities SET state = 'OUTREACH_READY', updated_at = ?
+       WHERE id = ? AND state = 'NURTURE'`
+    )
+    .bind(nowIso(), row.entity_id)
+    .run();
+
+  return { ok: true, queue_date: day };
+}
+
+// --- did they answer? -------------------------------------------------------
+//
+// `entities.response_status` has existed since the first schema and nothing
+// ever wrote to it. It is the right home for this: NULL means "sent, waiting",
+// and the three values below are the only answers that matter.
+
+export const RESPONSE_STATUSES = ['REPLIED', 'NO_REPLY', 'GHOSTED'];
+
+/**
+ * Record what happened after a send.
+ *
+ * REPLIED also advances the funnel, because a reply is exactly what the
+ * REPLIED state means. The guard keeps it from dragging a lead BACKWARDS out
+ * of CONVERSATION or CLIENT, which are further along.
+ */
+export async function setResponseStatus(db, entityId, status) {
+  const clean = status ? String(status).toUpperCase() : null;
+  if (clean && !RESPONSE_STATUSES.includes(clean)) {
+    return { ok: false, error: `status must be one of ${RESPONSE_STATUSES.join(', ')}, or empty` };
+  }
+
+  const row = await db.prepare('SELECT state FROM entities WHERE id = ?').bind(entityId).first();
+  if (!row) return { ok: false, error: 'not-found' };
+
+  const ts = nowIso();
+  await db.prepare(
+    `UPDATE entities SET response_status = ?, updated_at = ? WHERE id = ?`
+  ).bind(clean, ts, entityId).run();
+
+  // Only ever move between CONTACTED and REPLIED. Anything further along the
+  // funnel is left exactly where it is.
+  if (clean === 'REPLIED' && row.state === 'CONTACTED') {
+    await db.prepare("UPDATE entities SET state = 'REPLIED', updated_at = ? WHERE id = ?")
+      .bind(ts, entityId).run();
+  } else if (clean !== 'REPLIED' && row.state === 'REPLIED') {
+    await db.prepare("UPDATE entities SET state = 'CONTACTED', updated_at = ? WHERE id = ?")
+      .bind(ts, entityId).run();
+  }
+
+  return { ok: true, entity_id: entityId, response_status: clean };
+}
+
+/**
+ * Anyone contacted more than N days ago who never answered is ghosted.
+ *
+ * Only fills in a blank: a status set by hand is never overwritten, so marking
+ * someone REPLIED is permanent until it is changed back. Ghosting is a label,
+ * not a punishment — a ghosted lead is already out of the queue because it is
+ * CONTACTED, and nothing here sends anything or blocks anything.
+ */
+export async function sweepGhosted(db, days = 30) {
+  const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
+  const res = await db.prepare(
+    `UPDATE entities SET response_status = 'GHOSTED', updated_at = ?
+      WHERE state = 'CONTACTED'
+        AND response_status IS NULL
+        AND last_contacted_at IS NOT NULL
+        AND last_contacted_at < ?`
+  ).bind(nowIso(), cutoff).run();
+
+  return { ok: true, ghosted: res?.meta?.changes || 0, after_days: days, cutoff };
 }
 
 /** Permanent opt-out. Nothing removes these automatically. */

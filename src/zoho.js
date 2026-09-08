@@ -200,6 +200,124 @@ async function fetchAccount(env, token) {
   }
 }
 
+// --- the signature ----------------------------------------------------------
+
+/**
+ * The account's own signature, fetched from Zoho.
+ *
+ * Zoho does NOT attach the webmail signature to messages posted through the
+ * API — that is a compose-time feature of the web client. So mail sent from
+ * this dashboard arrived without the firma while mail sent by hand had it.
+ * Rather than keeping a second copy of the signature in this repo (which then
+ * drifts from the real one), it is read from the account that is sending.
+ *
+ * Cached for a day in app_settings: it changes rarely and a send must not wait
+ * on an extra round trip. `force` refreshes it after an edit in Zoho.
+ *
+ * Uses ZohoMail.accounts.READ, which is already in ZOHO_SCOPES — no re-consent.
+ */
+const SIGNATURE_TTL_MS = 24 * 60 * 60 * 1000;
+
+export async function fetchSignature(env, db, { force = false } = {}) {
+  if (!force) {
+    const at = Number(await getSetting(db, 'zoho_signature_at') || 0);
+    if (at && Date.now() - at < SIGNATURE_TTL_MS) {
+      return { ok: true, html: await getSetting(db, 'zoho_signature'), cached: true };
+    }
+  }
+
+  const tok = await accessToken(env, db);
+  if (!tok.ok) return { ok: false, error: `auth: ${tok.error}` };
+
+  try {
+    const res = await fetch(`${region(env).mail}/api/accounts/signature`, {
+      headers: { Authorization: `Zoho-oauthtoken ${tok.token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: `http-${res.status}` };
+
+    // One id returns an object, no id returns an array. `position` orders them,
+    // so the lowest is the default.
+    const list = Array.isArray(data?.data) ? data.data : (data?.data ? [data.data] : []);
+    if (!list.length) return { ok: true, html: null, empty: true };
+
+    const chosen = [...list].sort((a, b) => Number(a?.position ?? 0) - Number(b?.position ?? 0))[0];
+    const html = String(chosen?.content || '').trim() || null;
+
+    await setSetting(db, 'zoho_signature', html || '');
+    await setSetting(db, 'zoho_signature_at', String(Date.now()));
+    return { ok: true, html, name: chosen?.name || null };
+  } catch (err) {
+    return { ok: false, error: String(err?.name === 'TimeoutError' ? 'timeout' : err?.message || err).slice(0, 120) };
+  }
+}
+
+const escapeHtml = (s) =>
+  String(s ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/** Where the firma goes: above the legal footer, below the sign-off. */
+const FOOTER_MARK = 'If this is not relevant';
+
+export function splitFooter(body) {
+  const i = String(body ?? '').indexOf(FOOTER_MARK);
+  if (i < 0) return { message: String(body ?? ''), footer: '' };
+  return { message: String(body).slice(0, i).trimEnd(), footer: String(body).slice(i).trim() };
+}
+
+/**
+ * Build the HTML message: the plaintext draft rendered faithfully, the firma
+ * exactly as Zoho stores it, and the legal footer set quieter but still plainly
+ * readable.
+ *
+ * The stored draft stays plaintext — that is what the dashboard shows and what
+ * gets edited. HTML is produced only at the moment of sending.
+ */
+export function buildHtmlBody(body, signatureHtml) {
+  const { message, footer } = splitFooter(body);
+  const para = (t) => escapeHtml(t).replace(/\n/g, '<br>');
+  return [
+    '<div style="font:15px/1.65 -apple-system,BlinkMacSystemFont,\'Segoe UI\',system-ui,sans-serif;color:#1a1918">',
+    `<div>${para(message)}</div>`,
+    signatureHtml ? `<div style="margin-top:18px">${signatureHtml}</div>` : '',
+    footer
+      ? `<div style="margin-top:22px;padding-top:12px;border-top:1px solid #e0e0e0;font-size:12px;line-height:1.5;color:#666">${para(footer)}</div>`
+      : '',
+    '</div>',
+  ].filter(Boolean).join('');
+}
+
+/** Plaintext fallback: the firma flattened, inserted above the legal footer. */
+export function buildTextBody(body, signatureHtml) {
+  const firma = htmlToText(signatureHtml);
+  if (!firma) return body;
+  const { message, footer } = splitFooter(body);
+  return [message, '', firma, footer ? `\n${footer}` : ''].filter(Boolean).join('\n').trim();
+}
+
+/** Enough HTML-to-text for a signature block: links keep their URL. */
+export function htmlToText(html) {
+  if (!html) return '';
+  return String(html)
+    .replace(/<\s*(script|style)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\s*\/\s*(p|div|tr|h[1-6]|li)\s*>/gi, '\n')
+    .replace(/<\s*a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\s*\/\s*a\s*>/gi,
+      (_, href, text) => {
+        const label = text.replace(/<[^>]+>/g, '').trim();
+        const url = String(href).trim();
+        if (!label) return url;
+        return url.includes(label) || label.includes(url) ? label : `${label} (${url})`;
+      })
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/gi, "'")
+    .split('\n').map((l) => l.replace(/[ \t]+$/, '')).join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 // --- sending ----------------------------------------------------------------
 
 /**
@@ -228,6 +346,21 @@ export async function sendMail(env, db, { to, subject, body, fromAddress }) {
   const from = fromAddress || env.SENDER_EMAIL || (await getSetting(db, 'zoho_from_address'));
   if (!from) return { ok: false, error: 'no-from-address' };
 
+  // The firma, from the sending account itself. A failure here must never stop
+  // a send: the email is still correct and still legal without it, so we note
+  // it and carry on rather than losing the message.
+  const sig = await fetchSignature(env, db);
+  const signatureHtml = sig.ok ? sig.html : null;
+
+  // Zoho's send API takes ONE content field and mailFormat is html|plaintext —
+  // there is no multipart/alternative here, so this picks one. HTML is the
+  // default because it is the only way the real firma renders as designed;
+  // set MAIL_FORMAT=plaintext to send flattened text instead.
+  const format = String(env.MAIL_FORMAT || 'html').toLowerCase() === 'plaintext' ? 'plaintext' : 'html';
+  const content = format === 'html'
+    ? buildHtmlBody(body, signatureHtml)
+    : buildTextBody(body, signatureHtml);
+
   try {
     const res = await fetch(`${region(env).mail}/api/accounts/${accountId}/messages`, {
       method: 'POST',
@@ -239,8 +372,8 @@ export async function sendMail(env, db, { to, subject, body, fromAddress }) {
         fromAddress: from,
         toAddress: cleanTo,
         subject: cleanSubject,
-        content: body,
-        mailFormat: 'plaintext',
+        content,
+        mailFormat: format,
       }),
       signal: AbortSignal.timeout(25_000),
     });
@@ -254,7 +387,12 @@ export async function sendMail(env, db, { to, subject, body, fromAddress }) {
     if (code && code !== 200) {
       return { ok: false, error: `zoho-${code}: ${String(data?.status?.description).slice(0, 150)}` };
     }
-    return { ok: true, messageId: data?.data?.messageId || null };
+    return {
+      ok: true,
+      messageId: data?.data?.messageId || null,
+      format,
+      signature: signatureHtml ? 'attached' : (sig.ok ? 'none-set-in-zoho' : `unavailable: ${sig.error}`),
+    };
   } catch (err) {
     return {
       ok: false,
