@@ -47,7 +47,13 @@ CREATE TABLE IF NOT EXISTS entities (
   client_status      TEXT,
   followup_status    TEXT,
   times_surfaced     INTEGER NOT NULL DEFAULT 0,
-  updated_at         TEXT NOT NULL
+  updated_at         TEXT NOT NULL,
+  -- Added by migration 001. Repeated here so db:init produces the same table
+  -- as a migrated one; the dashboard reads both phone and has_website, so a
+  -- fresh database without them cannot render.
+  phone              TEXT,
+  osm_tags           TEXT,             -- JSON
+  has_website        INTEGER           -- 1 | 0 | NULL (unknown)
 );
 
 -- state is the hot filter on every queue build.
@@ -55,6 +61,7 @@ CREATE INDEX IF NOT EXISTS idx_entities_state       ON entities(state);
 CREATE INDEX IF NOT EXISTS idx_entities_score       ON entities(score DESC);
 CREATE INDEX IF NOT EXISTS idx_entities_evaluated   ON entities(last_evaluated_at);
 CREATE INDEX IF NOT EXISTS idx_entities_domain      ON entities(domain);
+CREATE INDEX IF NOT EXISTS idx_entities_has_website ON entities(has_website);
 
 -- ---------------------------------------------------------------------------
 -- entity_keys — THE dedup index.
@@ -91,7 +98,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
   bytes          INTEGER,
   ttfb_ms        INTEGER,
   signals        TEXT,                 -- JSON, see src/extract.js
-  text_sample    TEXT
+  text_sample    TEXT,
+  render_mode    TEXT                  -- static | browser (migration 002)
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_entity ON snapshots(entity_id, fetched_at DESC);
@@ -148,14 +156,24 @@ CREATE TABLE IF NOT EXISTS outreach (
   subject      TEXT,
   body         TEXT,
   cta          TEXT,
-  status       TEXT NOT NULL DEFAULT 'DRAFT',  -- DRAFT | APPROVED | SENT | SKIPPED
+  status       TEXT NOT NULL DEFAULT 'DRAFT',  -- DRAFT | SENT | SKIPPED | BOUNCED
   is_followup  INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL,
-  sent_at      TEXT
+  sent_at      TEXT,
+  -- Added by migrations 003 and 004. Repeated here so that a fresh db:init
+  -- produces the same table as a migrated one; without them the two drift.
+  sent_via     TEXT,
+  send_error   TEXT,
+  bounced_at   TEXT,
+  edited_at    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_outreach_entity ON outreach(entity_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_outreach_date   ON outreach(queue_date, rank);
+
+-- The history pages read by status, newest first.
+CREATE INDEX IF NOT EXISTS idx_outreach_status_sent    ON outreach(status, sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_outreach_status_created ON outreach(status, created_at DESC);
 
 -- One draft per entity per day. Belt and braces against double-drafting.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_outreach_unique ON outreach(entity_id, queue_date);
@@ -236,3 +254,55 @@ CREATE TABLE IF NOT EXISTS keywords (
 CREATE INDEX IF NOT EXISTS idx_keywords_status ON keywords(status, last_run_at);
 CREATE INDEX IF NOT EXISTS idx_keywords_niche  ON keywords(niche);
 
+
+-- ---------------------------------------------------------------------------
+-- feedback — every human decision, and the reason given for it.
+--
+-- Added by migration 002, repeated here so db:init produces a database the
+-- dashboard can actually query. The reason text is the most valuable output of
+-- the whole system: it is what teaches the scoring what Lucia actually wants,
+-- and it is where a skip reason lives, since the outreach row does not hold one.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS feedback (
+  id            TEXT PRIMARY KEY,
+  entity_id     TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  outreach_id   TEXT,
+  decision      TEXT NOT NULL,          -- SENT | SKIPPED | BLOCKED | BOUNCED
+  reason        TEXT,                   -- free text from the reviewer
+  reviewer      TEXT,
+  score_at_time INTEGER,
+  niche_at_time TEXT,
+  created_at    TEXT NOT NULL,
+  applied       INTEGER NOT NULL DEFAULT 0  -- folded into lessons yet?
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_entity   ON feedback(entity_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_applied  ON feedback(applied, created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_outreach ON feedback(outreach_id);
+
+-- ---------------------------------------------------------------------------
+-- lessons — general rules derived from that feedback (migration 002).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS lessons (
+  id           TEXT PRIMARY KEY,
+  lesson       TEXT NOT NULL,
+  kind         TEXT NOT NULL DEFAULT 'AVOID',  -- AVOID | PREFER
+  niche        TEXT,
+  weight       INTEGER NOT NULL DEFAULT 1,
+  source_count INTEGER NOT NULL DEFAULT 1,
+  active       INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_lessons_active ON lessons(active, weight DESC);
+
+-- ---------------------------------------------------------------------------
+-- app_settings — small operational state that has to survive deploys
+-- (migration 003). Holds the Zoho OAuth refresh token and account id.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS app_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT,
+  updated_at TEXT NOT NULL
+);

@@ -1,9 +1,15 @@
 // Worker entry point: cron handlers + a small authenticated API + dashboard.
 
 import { runCrawl } from './pipeline.js';
-import { buildQueue, getQueue, markSent, markSkipped, suppress, todayStr } from './queue.js';
+import {
+  buildQueue, getQueue, markBounced, markSent, markSkipped, revive, RESPONSE_STATUSES,
+  setResponseStatus, suppress, sweepGhosted, todayStr,
+} from './queue.js';
 import { ingestSeeds } from './discover.js';
 import { renderDashboard } from './dashboard.js';
+import {
+  canSpamFooter, hasCanSpamFooter, stripControl, stripControlKeepLines,
+} from './outreach.js';
 import { harvestWikipedia, mineCorpus, storeCandidates, validateBatch } from './keywords.js';
 import { queryCertTransparency } from './sources.js';
 import { deriveLessons, recordFeedback, rerankOne } from './learning.js';
@@ -12,8 +18,8 @@ import {
   sessionFrom, startLogin, verifySession,
 } from './auth.js';
 import {
-  authorizeUrl, exchangeCode, sendMail, sentToday, signState, verifyState,
-  zohoConfigured, zohoConnected,
+  authorizeUrl, exchangeCode, fetchSignature, sendMail, sentToday, signState,
+  verifyState, zohoConfigured, zohoConnected,
 } from './zoho.js';
 
 /**
@@ -81,6 +87,20 @@ function safeJson(s) {
   try { return JSON.parse(s); } catch { return null; }
 }
 
+/** The rendered pages. Every one gets a nonce and cspFor(). */
+const PAGES = {
+  '/': 'today',
+  '/dashboard': 'today',
+  '/sent': 'sent',
+  '/skipped': 'skipped',
+  '/bounced': 'bounced',
+};
+
+/** A date filter is only ever YYYY-MM-DD. Anything else is not a date. */
+function dateParam(s) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? s : null;
+}
+
 function timingSafeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
   let diff = 0;
@@ -134,6 +154,22 @@ const tooMany = (retryAfter = 60) =>
  */
 function hasAccessAssertion(request) {
   return Boolean(request.headers.get('cf-access-jwt-assertion'));
+}
+
+/**
+ * The email of whoever Cloudflare Access authenticated, or null.
+ *
+ * Trusting these headers is safe here for one specific reason: the only route
+ * to this Worker is leads.maledadams.work, which sits behind Access, and
+ * workers.dev is disabled. A request cannot reach this code without Access
+ * having verified it first, so the headers cannot be forged by a client.
+ *
+ * If another route is ever added, this assumption breaks and the JWT would
+ * need verifying against the team's public keys.
+ */
+function accessUser(request) {
+  if (!hasAccessAssertion(request)) return null;
+  return request.headers.get('cf-access-authenticated-user-email') || 'access-user';
 }
 
 export default {
@@ -221,9 +257,14 @@ export default {
       return json({ error: 'not found' }, 404);
     }
 
-    // A signed-in person, or a valid shared key. People get Google; scripts
-    // and cron keep the key.
-    const signedInAs = await verifySession(env, sessionFrom(request));
+    // Three ways in, in order of preference.
+    //
+    // Cloudflare Access first: if it authenticated the request, that IS the
+    // login and asking for anything further would be absurd. Not honouring it
+    // was a real bug — Access signed people in and this Worker then refused
+    // them with a bare 401.
+    const viaAccess = accessUser(request);
+    const signedInAs = viaAccess || await verifySession(env, sessionFrom(request));
     const hasKey = authorized(request, env);
 
     // A key in the query string is swapped for a session cookie and removed
@@ -249,15 +290,30 @@ export default {
 
     try {
       // ---- dashboard ----------------------------------------------------
-      if (url.pathname === '/' || url.pathname === '/dashboard') {
-        const day = url.searchParams.get('day') || todayStr();
+      //
+      // One table, not four route branches, so that every page is guaranteed
+      // the same nonce and the same CSP. A page that quietly rendered without
+      // cspFor() would still work, which is exactly why it would go unnoticed
+      // — and it displays text scraped from other people's websites.
+      const view = PAGES[url.pathname];
+      if (view) {
         const nonce = btoa(crypto.randomUUID()).replace(/=+$/, '');
         const sending = {
           connected: zohoConfigured(env) && await zohoConnected(db),
           sent_today: await sentToday(db),
           daily_cap: Number(env.DAILY_SEND_CAP || 30),
         };
-        const html = await renderDashboard(db, env, day, nonce, signedInAs, sending);
+        const html = await renderDashboard(db, env, {
+          view,
+          nonce,
+          signedInAs,
+          sending,
+          day: url.searchParams.get('day') || todayStr(),
+          page: Math.max(1, Number(url.searchParams.get('page')) || 1),
+          q: (url.searchParams.get('q') || '').trim().slice(0, 80),
+          from: dateParam(url.searchParams.get('from')),
+          to: dateParam(url.searchParams.get('to')),
+        });
         return new Response(html, {
           headers: {
             ...SECURITY_HEADERS,
@@ -368,6 +424,123 @@ export default {
           'SELECT lesson, kind, niche, weight, source_count, created_at FROM lessons WHERE active = 1 ORDER BY weight DESC'
         ).all();
         return json(results);
+      }
+
+      // Edit a draft before it goes out.
+      //
+      // Nothing else in the system writes subject/body after buildQueue, and
+      // /api/send reads both straight from the row at send time, so an edit
+      // here flows through to the recipient with no further plumbing.
+      const edit = url.pathname.match(/^\/api\/outreach\/([\w-]+)\/edit$/);
+      if (edit && request.method === 'POST') {
+        const id = edit[1];
+        const body = await request.json().catch(() => ({}));
+
+        const row = await db.prepare('SELECT status FROM outreach WHERE id = ?').bind(id).first();
+        if (!row) return json({ error: 'not-found' }, 404);
+        // A sent email is a record of what someone actually received. Editing
+        // it would make the record a lie.
+        if (row.status === 'SENT') return json({ error: 'already-sent' }, 409);
+
+        // stripControl on a SUBJECT (collapses whitespace, kills header
+        // injection); stripControlKeepLines on a BODY, where the line breaks
+        // are the content and stripControl would flatten the whole email.
+        const subject = stripControl(body.subject).slice(0, 200);
+        let text = stripControlKeepLines(body.body).slice(0, 8000);
+        if (!subject || !text) return json({ error: 'subject and body are both required' }, 400);
+
+        // CAN-SPAM is not decorative. A reviewer trimming the email can delete
+        // the opt-out and the postal address without realising they are the
+        // legally required part, so put them back rather than trusting nobody
+        // will.
+        let footerRestored = false;
+        if (!hasCanSpamFooter(text, env)) {
+          text += `\n${canSpamFooter(env)}`;
+          footerRestored = true;
+        }
+
+        await db.prepare('UPDATE outreach SET subject = ?, body = ?, edited_at = ? WHERE id = ?')
+          .bind(subject, text, new Date().toISOString(), id).run();
+
+        return json({ ok: true, subject, body: text, footer_restored: footerRestored });
+      }
+
+      // The address was wrong, so the business goes back in the pool rather
+      // than being written off. See markBounced() for why this is not suppress().
+      const bounce = url.pathname.match(/^\/api\/outreach\/([\w-]+)\/bounce$/);
+      if (bounce && request.method === 'POST') {
+        const id = bounce[1];
+        const body = await request.json().catch(() => ({}));
+        const note = String(body.note || '').trim();
+        if (note.length < 4) return json({ error: 'say what the bounce said' }, 400);
+
+        const row = await db.prepare('SELECT entity_id FROM outreach WHERE id = ?').bind(id).first();
+        if (!row) return json({ error: 'not-found' }, 404);
+
+        const res = await markBounced(db, id, note.slice(0, 200));
+        if (!res.ok) return json(res, 400);
+
+        await recordFeedback(db, {
+          entityId: row.entity_id, outreachId: id, decision: 'BOUNCED', reason: note,
+          reviewer: signedInAs || 'dashboard',
+        });
+        return json(res);
+      }
+
+      // Put a skipped or bounced draft back into today's queue to edit and send.
+      const back = url.pathname.match(/^\/api\/outreach\/([\w-]+)\/revive$/);
+      if (back && request.method === 'POST') {
+        const res = await revive(db, back[1]);
+        return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 409));
+      }
+
+      // Did they answer? Set by hand from the Sent page; the nightly sweep
+      // fills in GHOSTED for anyone left blank past the cutoff.
+      const status = url.pathname.match(/^\/api\/entity\/([\w-]+)\/status$/);
+      if (status && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const res = await setResponseStatus(db, status[1], body.status || null);
+        return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 400));
+      }
+
+      // Runs nightly inside buildQueue; exposed so it can be run on demand.
+      if (url.pathname === '/api/run/ghost' && request.method === 'POST') {
+        return json(await sweepGhosted(db, Number(env.GHOST_AFTER_DAYS || 30)));
+      }
+
+      // Re-read the firma after editing it in Zoho, rather than waiting a day.
+      if (url.pathname === '/api/zoho/signature' && request.method === 'GET') {
+        const res = await fetchSignature(env, db, { force: url.searchParams.get('refresh') === '1' });
+        return json({
+          ...res,
+          html: undefined,
+          preview: res.html ? String(res.html).slice(0, 400) : null,
+          statuses: RESPONSE_STATUSES,
+        });
+      }
+
+      // A corrected address found by hand. This is the other way a bounced
+      // lead comes back — the crawler finding one on a re-crawl is the first.
+      const setEmail = url.pathname.match(/^\/api\/entity\/([\w-]+)\/email$/);
+      if (setEmail && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const email = stripControl(body.email).toLowerCase();
+        if (!/^[^\s@]+@[^\s@.]+\.[^\s@]+$/.test(email) || email.length > 254) {
+          return json({ error: 'that is not an email address' }, 400);
+        }
+
+        // Never re-adopt an address that already bounced or opted out.
+        const blocked = await db.prepare('SELECT reason FROM suppressions WHERE key = ?')
+          .bind(email).first();
+        if (blocked) return json({ error: `that address is suppressed (${blocked.reason})` }, 409);
+
+        const res = await db.prepare(
+          `UPDATE entities SET contact_email = ?, contact_source = 'manual', updated_at = ?
+           WHERE id = ?`
+        ).bind(email, new Date().toISOString(), setEmail[1]).run();
+
+        if (!res?.meta?.changes) return json({ error: 'not-found' }, 404);
+        return json({ ok: true, contact_email: email });
       }
 
       const act = url.pathname.match(/^\/api\/outreach\/([\w-]+)\/(sent|skip|suppress)$/);
