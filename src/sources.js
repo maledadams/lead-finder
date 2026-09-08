@@ -113,10 +113,10 @@ export function allKeywords() {
  * Pick the keywords least recently queried, so the rotation covers the whole
  * list over time instead of hammering the same few every day.
  */
-export async function nextKeywords(db, limit) {
+export async function nextKeywords(db, profileId, limit) {
   const all = allKeywords();
   const { results } = await db
-    .prepare('SELECT keyword, last_run_at FROM source_cursor')
+    .prepare('SELECT keyword, last_run_at FROM source_cursor WHERE profile_id = ?').bind(profileId)
     .all();
   const seen = new Map((results || []).map((r) => [r.keyword, r.last_run_at]));
 
@@ -125,17 +125,17 @@ export async function nextKeywords(db, limit) {
     .slice(0, limit);
 }
 
-export async function recordKeywordRun(db, keyword, found) {
+export async function recordKeywordRun(db, profileId, keyword, found) {
   await db
     .prepare(
-      `INSERT INTO source_cursor (keyword, last_run_at, total_found, runs)
-       VALUES (?,?,?,1)
-       ON CONFLICT(keyword) DO UPDATE SET
+      `INSERT INTO source_cursor (profile_id, keyword, last_run_at, total_found, runs)
+       VALUES (?,?,?,?,1)
+       ON CONFLICT(profile_id, keyword) DO UPDATE SET
          last_run_at = excluded.last_run_at,
          total_found = total_found + excluded.total_found,
          runs = runs + 1`
     )
-    .bind(keyword, nowIso(), found)
+    .bind(profileId, keyword, nowIso(), found)
     .run();
 }
 

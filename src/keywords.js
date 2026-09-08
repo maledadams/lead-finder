@@ -199,7 +199,7 @@ export async function harvestOne(source, userAgent) {
  * vocabulary to search for. Deliberately compares against the *low* scorers
  * so common retail words do not survive.
  */
-export async function mineCorpus(db, { minScore = 60, limit = 300 } = {}) {
+export async function mineCorpus(db, profileId, { minScore = 60, limit = 300 } = {}) {
   const [good, bad] = await Promise.all([
     db.prepare(
       `SELECT s.text_sample FROM entities e JOIN snapshots s ON s.entity_id = e.id
@@ -257,7 +257,7 @@ function tally(rows) {
 }
 
 /** Insert candidates as UNVALIDATED. Existing rows are left alone. */
-export async function storeCandidates(db, candidates, source) {
+export async function storeCandidates(db, profileId, candidates, source) {
   if (!candidates.length) return 0;
   const ts = nowIso();
   let added = 0;
@@ -267,9 +267,9 @@ export async function storeCandidates(db, candidates, source) {
     const res = await db.batch(
       chunk.map((c) =>
         db.prepare(
-          `INSERT OR IGNORE INTO keywords (keyword, niche, source, status, added_at)
-           VALUES (?,?,?, 'UNVALIDATED', ?)`
-        ).bind(c.keyword, c.niche || null, source, ts)
+          `INSERT OR IGNORE INTO keywords (profile_id, keyword, niche, source, status, added_at)
+           VALUES (?,?,?,?, 'UNVALIDATED', ?)`
+        ).bind(profileId, c.keyword, c.niche || null, source, ts)
       )
     );
     added += res.reduce((n, r) => n + (r.meta?.changes || 0), 0);
@@ -283,7 +283,7 @@ const BACKOFF_MINUTES = 90;
 
 async function sourceInBackoff(db) {
   const row = await db
-    .prepare('SELECT last_run_at FROM source_cursor WHERE keyword = ?')
+    .prepare('SELECT last_run_at FROM source_cursor WHERE profile_id = ? AND keyword = ?')
     .bind(SOURCE_HEALTH_KEY)
     .first();
   if (!row?.last_run_at) return false;
@@ -293,11 +293,12 @@ async function sourceInBackoff(db) {
 async function markSourceDown(db) {
   await db
     .prepare(
-      `INSERT INTO source_cursor (keyword, last_run_at, total_found, runs)
-       VALUES (?,?,0,1)
-       ON CONFLICT(keyword) DO UPDATE SET last_run_at = excluded.last_run_at, runs = runs + 1`
+      `INSERT INTO source_cursor (profile_id, keyword, last_run_at, total_found, runs)
+       VALUES (?,?,?,0,1)
+       ON CONFLICT(profile_id, keyword) DO UPDATE SET
+         last_run_at = excluded.last_run_at, runs = runs + 1`
     )
-    .bind(SOURCE_HEALTH_KEY, nowIso())
+    .bind(profileId, SOURCE_HEALTH_KEY, nowIso())
     .run();
 }
 
@@ -306,7 +307,7 @@ async function markSourceDown(db) {
  * ACTIVE or DEAD. This is what stops the list filling with plausible-sounding
  * terms that find nothing.
  */
-export async function validateBatch(db, limit, queryFn, userAgent, concurrency = 3) {
+export async function validateBatch(db, profileId, limit, queryFn, userAgent, concurrency = 3) {
   // Back off entirely while the source is known to be down.
   //
   // The circuit breaker alone was not enough: it stops a batch after six
@@ -319,7 +320,7 @@ export async function validateBatch(db, limit, queryFn, userAgent, concurrency =
   }
 
   const { results } = await db
-    .prepare("SELECT keyword FROM keywords WHERE status = 'UNVALIDATED' ORDER BY added_at LIMIT ?")
+    .prepare("SELECT keyword FROM keywords WHERE profile_id = ? AND status = 'UNVALIDATED' ORDER BY added_at LIMIT ?")
     .bind(limit)
     .all();
 
@@ -387,7 +388,7 @@ export async function validateBatch(db, limit, queryFn, userAgent, concurrency =
  * The last line of defence against terms that pass validation on volume alone.
  * Only applies once a keyword has had a fair number of runs.
  */
-export async function demoteUnproductive(db, { minRuns = 6 } = {}) {
+export async function demoteUnproductive(db, profileId, { minRuns = 6 } = {}) {
   const res = await db
     .prepare(
       `UPDATE keywords SET status = 'DEAD'
@@ -399,7 +400,7 @@ export async function demoteUnproductive(db, { minRuns = 6 } = {}) {
 }
 
 /** Active keywords, least recently used first. */
-export async function activeKeywords(db, limit) {
+export async function activeKeywords(db, profileId, limit) {
   const { results } = await db
     .prepare(
       `SELECT keyword, niche FROM keywords
@@ -412,7 +413,7 @@ export async function activeKeywords(db, limit) {
   return results || [];
 }
 
-export async function recordUse(db, keyword, leadsFound) {
+export async function recordUse(db, profileId, keyword, leadsFound) {
   await db
     .prepare(
       `UPDATE keywords
@@ -424,7 +425,7 @@ export async function recordUse(db, keyword, leadsFound) {
 }
 
 /** Harvest every configured Wikipedia source. */
-export async function harvestWikipedia(db, userAgent) {
+export async function harvestWikipedia(db, profileId, userAgent) {
   const out = { sources: 0, terms: 0, added: 0, errors: [] };
 
   for (const source of WIKI_SOURCES) {

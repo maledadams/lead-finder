@@ -32,7 +32,7 @@ import { normalizeDomain, normalizeUrl, nowIso, resolveEntity } from './entity.j
  * an object with several of those. Anything unparseable is reported back
  * rather than silently dropped.
  */
-export async function ingestSeeds(db, seeds, source = 'seed') {
+export async function ingestSeeds(db, profileId, seeds, source = 'seed') {
   const out = { accepted: 0, duplicates: 0, rejected: [], entities: [] };
 
   for (const raw of seeds) {
@@ -76,7 +76,7 @@ export function parseSeedString(line) {
  * Add candidate URLs to the crawl frontier, one per domain, skipping anything
  * we already know about.
  */
-export async function addToFrontier(db, candidates, parentEntityId = null) {
+export async function addToFrontier(db, profileId, candidates, parentEntityId = null) {
   if (!candidates.length) return 0;
 
   const byDomain = new Map();
@@ -102,7 +102,7 @@ export async function addToFrontier(db, candidates, parentEntityId = null) {
       `SELECT domain FROM entities
        WHERE domain IN (${ph}) AND last_evaluated_at IS NOT NULL`
     ).bind(...domains).all(),
-    db.prepare(`SELECT domain FROM crawl_frontier WHERE domain IN (${ph})`).bind(...domains).all(),
+    db.prepare(`SELECT domain FROM crawl_frontier WHERE profile_id = ? AND domain IN (${ph})`).bind(profileId, ...domains).all(),
   ]);
 
   const skip = new Set([
@@ -118,10 +118,10 @@ export async function addToFrontier(db, candidates, parentEntityId = null) {
     fresh.map((c) =>
       db.prepare(
         `INSERT OR IGNORE INTO crawl_frontier
-           (url, domain, depth, parent_entity, reason, priority, status, added_at)
-         VALUES (?,?,?,?,?,?, 'PENDING', ?)`
+           (profile_id, url, domain, depth, parent_entity, reason, priority, status, added_at)
+         VALUES (?,?,?,?,?,?,?, 'PENDING', ?)`
       ).bind(
-        normalizeUrl(c.url), c.domain, c.depth || 0,
+        profileId, normalizeUrl(c.url), c.domain, c.depth || 0,
         parentEntityId, (c.reason || 'link').slice(0, 120), c.priority || 0, ts
       )
     )
@@ -183,23 +183,23 @@ export function selectPeerLinks(signals, sourceUrl, depth) {
 }
 
 /** Pull the next batch of pending frontier URLs, highest priority first. */
-export async function takeFrontierBatch(db, limit) {
+export async function takeFrontierBatch(db, profileId, limit) {
   const { results } = await db
     .prepare(
       `SELECT url, domain, depth, parent_entity, reason FROM crawl_frontier
-       WHERE status = 'PENDING'
+       WHERE profile_id = ? AND status = 'PENDING'
        ORDER BY priority DESC, added_at ASC
        LIMIT ?`
     )
-    .bind(limit)
+    .bind(profileId, limit)
     .all();
   return results || [];
 }
 
-export async function markFrontier(db, url, status) {
+export async function markFrontier(db, profileId, url, status) {
   await db
-    .prepare('UPDATE crawl_frontier SET status = ?, processed_at = ? WHERE url = ?')
-    .bind(status, nowIso(), url)
+    .prepare('UPDATE crawl_frontier SET status = ?, processed_at = ? WHERE profile_id = ? AND url = ?')
+    .bind(status, nowIso(), profileId, url)
     .run();
 }
 
@@ -207,14 +207,15 @@ export async function markFrontier(db, url, status) {
  * Entities due another look. Two reasons to re-check: enough time has passed,
  * or the score sat just under the bar and might have moved.
  */
-export async function staleEntities(db, { days, nearMissFrom, nearMissTo, limit }) {
+export async function staleEntities(db, profileId, { days, nearMissFrom, nearMissTo, limit }) {
   const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
   const { results } = await db
     .prepare(
       `SELECT id, website, domain, display_name, instagram, phone, osm_tags,
               has_website, niche, contact_email, score, state, last_evaluated_at
        FROM entities
-       WHERE (website IS NOT NULL OR has_website = 0)
+       WHERE profile_id = ?
+         AND (website IS NOT NULL OR has_website = 0)
          AND state NOT IN ('CONTACTED','REPLIED','CONVERSATION','CLIENT','DO_NOT_CONTACT','REJECTED')
          AND (
               last_evaluated_at IS NULL
@@ -225,7 +226,8 @@ export async function staleEntities(db, { days, nearMissFrom, nearMissTo, limit 
        LIMIT ?`
     )
     .bind(
-      cutoff,
+      profileId,
+        cutoff,
       nearMissFrom,
       nearMissTo,
       new Date(Date.now() - Math.floor(days / 3) * 86400_000).toISOString(),

@@ -343,7 +343,7 @@ export function isChain(tags) {
  * appearing as a storefront in several different cities is a chain, whatever
  * its tags say. Run after a few metros have been swept.
  */
-export async function flagCrossMetroChains(db, minMetros = 3) {
+export async function flagCrossMetroChains(db, profileId, minMetros = 3) {
   const { results } = await db
     .prepare(
       `SELECT domain, COUNT(DISTINCT discovery_source) AS metros
@@ -395,9 +395,9 @@ function compactTags(tags) {
  * swept in the last day is skipped, so the two swept yesterday do not block
  * the twenty-four that have never been touched.
  */
-export async function nextMetros(db, limit, staleAfterHours = 20) {
+export async function nextMetros(db, profileId, limit, staleAfterHours = 20, metros = null) {
   const { results } = await db
-    .prepare("SELECT keyword, last_run_at FROM source_cursor WHERE keyword LIKE 'osm:%'")
+    .prepare("SELECT keyword, last_run_at FROM source_cursor WHERE profile_id = ? AND keyword LIKE 'osm:%'").bind(profileId)
     .all();
   const seen = new Map((results || []).map((r) => [r.keyword, r.last_run_at]));
   const cutoff = new Date(Date.now() - staleAfterHours * 3600_000).toISOString();
@@ -409,16 +409,16 @@ export async function nextMetros(db, limit, staleAfterHours = 20) {
     .slice(0, limit);
 }
 
-export async function recordMetroRun(db, metro, found) {
+export async function recordMetroRun(db, profileId, metro, found) {
   await db
     .prepare(
-      `INSERT INTO source_cursor (keyword, last_run_at, total_found, runs)
-       VALUES (?,?,?,1)
-       ON CONFLICT(keyword) DO UPDATE SET
+      `INSERT INTO source_cursor (profile_id, keyword, last_run_at, total_found, runs)
+       VALUES (?,?,?,?,1)
+       ON CONFLICT(profile_id, keyword) DO UPDATE SET
          last_run_at = excluded.last_run_at,
          total_found = total_found + excluded.total_found,
          runs = runs + 1`
     )
-    .bind(`osm:${metro}`, nowIso(), found)
+    .bind(profileId, `osm:${metro}`, nowIso(), found)
     .run();
 }
