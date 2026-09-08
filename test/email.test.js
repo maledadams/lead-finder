@@ -69,3 +69,28 @@ test('a two-letter TLD is only allowed if it is a real country code', () => {
   assert.equal(isUsableEmail('a@b.if'), false, '.if is not a country');
   assert.equal(isUsableEmail('a@b.of'), false, '.of is not a country');
 });
+
+// ---------------------------------------------------------------------------
+// The ambiguous form: prose and obfuscation are shaped identically.
+// ---------------------------------------------------------------------------
+
+test('a spaced "at" with a spelled "dot" is not an address when the local part is a stopword', () => {
+  // "email me at hello dot com" is a sentence; "hi at brand dot com" is an
+  // address. The only thing separating them is whether the local part could
+  // plausibly be a mailbox.
+  assert.deepEqual(decodeObfuscated('Email me at hello dot com'), []);
+  assert.deepEqual(decodeObfuscated('Find us at studio dot com'), []);
+  assert.deepEqual(decodeObfuscated('We are located at brand dot com'), []);
+  assert.deepEqual(decodeObfuscated('Available at shop dot com'), []);
+});
+
+test('brackets are unambiguous, so a stopword local part is still accepted there', () => {
+  // Someone who writes "me (at) brand (dot) com" plainly means an address.
+  assert.deepEqual(decodeObfuscated('me (at) brand (dot) com'), ['me@brand.com']);
+  assert.deepEqual(decodeObfuscated('us [at] brand [dot] com'), ['us@brand.com']);
+});
+
+test('a plausible mailbox name still decodes in the spaced form', () => {
+  assert.deepEqual(decodeObfuscated('hi at brand dot com'), ['hi@brand.com']);
+  assert.deepEqual(decodeObfuscated('ada at fenwickash dot co'), ['ada@fenwickash.co']);
+});

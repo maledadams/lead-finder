@@ -338,6 +338,16 @@ export function decodeCloudflareEmails(html) {
  * saying "here is how to reach me" — so reading it is reading their contact
  * details, not circumventing anything.
  */
+/**
+ * Words that end a sentence clause rather than name a mailbox.
+ *
+ * Only consulted for the ambiguous spaced form, where prose and obfuscation
+ * look identical: "email me at hello dot com" is a sentence, "hi at brand dot
+ * com" is an address.
+ */
+const NOT_A_MAILBOX =
+  /^(?:me|us|you|him|her|them|it|we|they|i|our|your|their|his|its|the|a|an|and|or|but|if|so|then|this|that|these|those|here|there|now|today|tomorrow|back|out|in|on|up|off|over|available|based|located|found|open|closed|live|working|looking|staying|arriving|starting)$/i;
+
 export function decodeObfuscated(text) {
   const out = [];
   // Every separator here must be REAL obfuscation. The previous pattern let
@@ -363,10 +373,15 @@ export function decodeObfuscated(text) {
     `([\\w.+-]{2,40})(?:${AT_SPACED})([\\w-]{2,40})(?:${DOT_BRACKETED}|${DOT_SPELLED})([a-z]{2,12})`,
   ];
 
-  for (const src of patterns) {
+  for (const [i, src] of patterns.entries()) {
+    const ambiguous = i === 1;             // the spaced " at " form
     const rx = new RegExp(`\\b${src}\\b`, 'gi');
     let m;
     while ((m = rx.exec(String(text || ''))) !== null) {
+      // "Email me at hello dot com" has the same shape as a real obfuscation,
+      // but "me" is not a mailbox — it is the object of the sentence. Only the
+      // spaced form needs this: brackets say plainly that an address is meant.
+      if (ambiguous && NOT_A_MAILBOX.test(m[1])) continue;
       const candidate = `${m[1]}@${m[2]}.${m[3]}`.toLowerCase();
       if (/^[^\s@]+@[^\s@]+\.[a-z]{2,12}$/.test(candidate)) out.push(candidate);
       if (out.length > 6) break;
