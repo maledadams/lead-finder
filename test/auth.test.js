@@ -95,9 +95,17 @@ test('Zoho is only considered usable with real credentials', async () => {
   assert.equal(zohoConfigured({ ZOHO_CLIENT_ID: 'x' }), false);
   assert.equal(zohoConfigured({ ZOHO_CLIENT_ID: 'x', ZOHO_CLIENT_SECRET: 'y' }), true);
 
-  // Only the two scopes needed to send. Nothing that can read existing mail.
-  assert.equal(ZOHO_SCOPES, 'ZohoMail.accounts.READ,ZohoMail.messages.CREATE');
+  // Exactly the scopes needed and no more. messages.READ was added so bounce
+  // notices in a mailbox label can be detected automatically; it is read-only.
+  assert.equal(
+    ZOHO_SCOPES,
+    'ZohoMail.accounts.READ,ZohoMail.messages.CREATE,ZohoMail.messages.READ'
+  );
+  // Nothing may ever modify or delete existing mail.
   assert.ok(!/ALL|DELETE|UPDATE|folders/i.test(ZOHO_SCOPES));
+  for (const scope of ZOHO_SCOPES.split(',')) {
+    assert.match(scope, /\.(READ|CREATE)$/, `${scope} must be read-only or create-only`);
+  }
 
   // offline access is what yields a refresh token; without it sending stops
   // working an hour after setup.

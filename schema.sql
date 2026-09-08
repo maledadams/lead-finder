@@ -330,3 +330,19 @@ CREATE TABLE IF NOT EXISTS mx_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mx_checked ON mx_cache(checked_at);
+
+-- ---------------------------------------------------------------------------
+-- bounce_seen — which bounce notices have been handled (migration 007).
+--
+-- The bounce label is polled rather than pushed, because Zoho Mail has no
+-- outgoing webhook for new mail. A notice is recorded here whether or not it
+-- could be attributed to a lead, so an unattributable one is examined once.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bounce_seen (
+  message_id  TEXT PRIMARY KEY,     -- Zoho's message id
+  outreach_id TEXT,                 -- null when it could not be attributed
+  outcome     TEXT,                 -- bounced | unmatched | failed: ...
+  seen_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_bounce_seen_at ON bounce_seen(seen_at);

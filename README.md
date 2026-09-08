@@ -215,6 +215,7 @@ Everything below is set in `wrangler.toml` and needs no code change.
 | `USER_AGENT` | — | How the crawler identifies itself. **Use a real contact URL.** |
 | `REQUIRE_ACCESS` | `true` | Refuse anything that did not arrive through Cloudflare Access |
 | `MAIL_FORMAT` | `html` | `html` renders your signature; `plaintext` flattens it |
+| `ZOHO_BOUNCE_LABEL` | `bounce` | The mailbox label carrying delivery failure notices |
 
 ## Making it yours: the part that is not configuration
 
@@ -250,12 +251,56 @@ external requests.
 - **Bounced** — dead addresses. Enter a corrected one and requeue.
 - **Metrics** — see below.
 
-### Bounces put the business back in the pool
+### Bounces are detected automatically
+
+Set up a filter in your mail provider that applies a label — `bounce` by
+default — to delivery failure notices. On every cron tick the system reads that
+label, finds the address the notice is about, and marks the matching lead
+bounced without you touching it.
+
+```
+Zoho filter:  subject contains "Delivery Status Notification"
+              or sender is mailer-daemon
+        →     apply label "bounce"
+```
+
+Set `ZOHO_BOUNCE_LABEL` in `wrangler.toml` if your label is called something
+else. `POST /api/run/bounces` runs it on demand and returns what it found.
+
+**This needs the `ZohoMail.messages.READ` scope**, which grants reading message
+headers and nothing else — no scope here can modify or delete mail. If you
+connected Zoho before this feature existed, visit `/api/zoho/connect` once to
+re-grant; sending keeps working in the meantime and bounce sync reports
+`reconnect Zoho` until you do.
+
+Two deliberate limits. A notice naming an address you never wrote to is
+recorded and skipped rather than guessed at, because marking the wrong business
+bounced would clear a good address. And Zoho Mail has no outgoing webhook for
+new mail, so this polls the label four times a day rather than being pushed —
+for a handful of bounces a week that is indistinguishable from a push.
+
+### A bounce puts the business back in the pool
 
 A bounce says the address was wrong, not that the business was. Marking one
 clears the stored address, records the dead one so it is never adopted again,
 and returns the business to the pool. It leaves your roster immediately and
 comes back on its own the next time a crawl finds a *different* address.
+
+### Dead addresses never reach you
+
+Before a lead enters the queue, DNS is asked whether its domain can receive
+mail at all — MX records, or an address record, which RFC 5321 treats as an
+implicit mail exchanger. A domain that does not exist is dropped before you
+ever see it, and the same check runs again immediately before every send, so
+nothing routes around it.
+
+This is a DNS lookup and nothing more. No message is sent, no SMTP session is
+opened, and the business never learns anything happened. Opening an SMTP
+conversation to test whether a mailbox exists would reveal more and is exactly
+the behaviour this project avoids.
+
+It fails open: if DNS is unreachable the lead is kept, because a wrong "no"
+would silently empty your morning queue while a wrong "yes" costs one bounce.
 
 ### Skipping teaches it
 

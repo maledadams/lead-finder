@@ -9,6 +9,7 @@ import { ingestSeeds } from './discover.js';
 import { renderDashboard } from './dashboard.js';
 import { PERIODS } from './metrics.js';
 import { canReceiveMail } from './mx.js';
+import { syncBounces } from './bounces.js';
 import {
   canSpamFooter, hasCanSpamFooter, stripControl, stripControlKeepLines,
 } from './outreach.js';
@@ -191,6 +192,15 @@ export default {
     ctx.waitUntil(
       (isQueueRun ? buildQueue(env, db) : runCrawl(env, db)).catch((err) => {
         console.error('scheduled run failed', event.cron, err?.stack || err);
+      })
+    );
+
+    // Bounces are checked on every tick, not only the queue run: an address
+    // that died should stop being usable within hours, not tomorrow. Kept in
+    // its own waitUntil so a mailbox problem cannot take the crawl down.
+    ctx.waitUntil(
+      syncBounces(env, db).catch((err) => {
+        console.error('bounce sync failed', err?.stack || err);
       })
     );
   },
@@ -516,6 +526,12 @@ export default {
       }
 
       // Runs nightly inside buildQueue; exposed so it can be run on demand.
+      // Poll the mailbox label and mark whatever it can attribute. Runs on
+      // every cron tick as well; exposed so it can be run on demand.
+      if (url.pathname === '/api/run/bounces' && request.method === 'POST') {
+        return json(await syncBounces(env, db));
+      }
+
       if (url.pathname === '/api/run/ghost' && request.method === 'POST') {
         return json(await sweepGhosted(db, Number(env.GHOST_AFTER_DAYS || 30)));
       }

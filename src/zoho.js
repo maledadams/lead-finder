@@ -26,9 +26,15 @@ const REGIONS = {
   jp: { accounts: 'https://accounts.zoho.jp', mail: 'https://mail.zoho.jp' },
 };
 
-// Only what is needed: read the account list once, and send. No mailbox reads,
-// no folder access, nothing that could touch existing mail.
-export const ZOHO_SCOPES = 'ZohoMail.accounts.READ,ZohoMail.messages.CREATE';
+// Only what is needed: read the account list and the signature, send, and read
+// message headers so bounces can be detected. Nothing here can modify or delete
+// existing mail — every scope is READ or CREATE.
+//
+// messages.READ was added after the first release. An existing connection was
+// granted without it, so bounce sync reports "reconnect Zoho" until the consent
+// screen is visited again; sending is unaffected.
+export const ZOHO_SCOPES =
+  'ZohoMail.accounts.READ,ZohoMail.messages.CREATE,ZohoMail.messages.READ';
 
 function region(env) {
   return REGIONS[(env.ZOHO_REGION || 'com').toLowerCase()] || REGIONS.com;
@@ -316,6 +322,82 @@ export function htmlToText(html) {
     .split('\n').map((l) => l.replace(/[ \t]+$/, '')).join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+
+// --- reading the bounce label -----------------------------------------------
+
+/**
+ * The id of a label, by name.
+ *
+ * Cached, because it never changes and this runs on every cron tick. A label
+ * renamed in Zoho is picked up when the cache is cleared or the name setting
+ * changes.
+ */
+export async function labelIdByName(env, db, name) {
+  const wanted = String(name || '').trim().toLowerCase();
+  if (!wanted) return { ok: false, error: 'no-label-name' };
+
+  const cachedFor = await getSetting(db, 'zoho_bounce_label_name');
+  const cachedId = await getSetting(db, 'zoho_bounce_label_id');
+  if (cachedId && cachedFor === wanted) return { ok: true, id: cachedId, cached: true };
+
+  const tok = await accessToken(env, db);
+  if (!tok.ok) return { ok: false, error: `auth: ${tok.error}` };
+  const accountId = await getSetting(db, 'zoho_account_id');
+  if (!accountId) return { ok: false, error: 'no-account-id' };
+
+  try {
+    const res = await fetch(`${region(env).mail}/api/accounts/${accountId}/labels`, {
+      headers: { Authorization: `Zoho-oauthtoken ${tok.token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, error: 'scope-missing (reconnect Zoho to grant mail read access)' };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: `http-${res.status}` };
+
+    const list = Array.isArray(data?.data) ? data.data : [];
+    const hit = list.find((l) => String(l?.displayName || l?.labelName || '').trim().toLowerCase() === wanted);
+    if (!hit) {
+      return { ok: false, error: `no label named "${name}" (found: ${list.map((l) => l.displayName || l.labelName).join(', ') || 'none'})` };
+    }
+
+    const id = String(hit.labelId ?? hit.id);
+    await setSetting(db, 'zoho_bounce_label_id', id);
+    await setSetting(db, 'zoho_bounce_label_name', wanted);
+    return { ok: true, id };
+  } catch (err) {
+    return { ok: false, error: String(err?.name === 'TimeoutError' ? 'timeout' : err?.message || err).slice(0, 120) };
+  }
+}
+
+/** Recent messages carrying a label, newest first. Headers and summary only. */
+export async function messagesWithLabel(env, db, labelId, { limit = 50 } = {}) {
+  const tok = await accessToken(env, db);
+  if (!tok.ok) return { ok: false, error: `auth: ${tok.error}` };
+  const accountId = await getSetting(db, 'zoho_account_id');
+  if (!accountId) return { ok: false, error: 'no-account-id' };
+
+  const url = `${region(env).mail}/api/accounts/${accountId}/messages/view`
+    + `?labelid=${encodeURIComponent(labelId)}&limit=${Math.min(Number(limit) || 50, 200)}`
+    + '&sortBy=date&sortorder=false';
+
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Zoho-oauthtoken ${tok.token}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, error: 'scope-missing (reconnect Zoho to grant mail read access)' };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: `http-${res.status}` };
+    return { ok: true, messages: Array.isArray(data?.data) ? data.data : [] };
+  } catch (err) {
+    return { ok: false, error: String(err?.name === 'TimeoutError' ? 'timeout' : err?.message || err).slice(0, 120) };
+  }
 }
 
 // --- sending ----------------------------------------------------------------
