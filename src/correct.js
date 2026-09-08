@@ -20,7 +20,7 @@
 import { AI_MODEL, NICHES } from './config.js';
 import { canReceiveMail } from './mx.js';
 import { isUsableEmail } from './extract.js';
-import { recordFeedback } from './learning.js';
+import { recordFeedback, rerankOne } from './learning.js';
 import { nowIso } from './entity.js';
 
 
@@ -30,12 +30,13 @@ const SCHEMA = {
   schema: {
     type: 'object',
     properties: {
+      kind: { type: 'string', enum: ['fact', 'opinion'] },
       display_name: { type: ['string', 'null'] },
       niche: { type: ['string', 'null'] },
       contact_email: { type: ['string', 'null'] },
       summary: { type: 'string' },
     },
-    required: ['display_name', 'niche', 'contact_email', 'summary'],
+    required: ['kind', 'display_name', 'niche', 'contact_email', 'summary'],
     additionalProperties: false,
   },
 };
@@ -57,8 +58,16 @@ THE REVIEWER'S NOTE
 ${note}
 
 RULES
-- Return a field ONLY if the note or the page clearly implies a new value for
-  it. Return null for anything you are not changing. Never invent.
+- kind: "fact" if the note says the RECORD IS WRONG about what this business is
+  called, what it sells, or how to reach it. "opinion" if it says whether this
+  business is a good lead — too corporate, not my kind of work, too big, love
+  this one. An opinion is not a mistake in the data.
+- If kind is "opinion", every other field MUST be null. Say nothing about the
+  record; the reviewer was not correcting it.
+- Otherwise return a field ONLY if the NOTE ITSELF asks for that change. The
+  page text is evidence for what the note claims, never a reason of its own —
+  do not tidy up a name the reviewer did not mention.
+- Return null for anything you are not changing. Never invent.
 - niche must be exactly one of: ${slugs.join(', ')} — or null.
 - contact_email must appear in the note or the page text. Never guess one.
 - summary: one short sentence saying what you changed and why.`;
@@ -98,17 +107,32 @@ export async function applyCorrection(env, db, entityId, note, { reviewer = 'das
   const changes = {};
   const rejected = [];
 
+  // An opinion changes no data, whatever the model filled in. Small models
+  // volunteer tidy-ups nobody asked for — one rewrote a business name from the
+  // page while the note only said "too corporate for me", which turned a
+  // judgement into a correction and lost it from the ranking entirely.
+  const opinion = String(parsed.kind || '').toLowerCase() === 'opinion';
+
   const name = String(parsed.display_name || '').trim();
-  if (name && name.length <= 120 && name !== entity.display_name) changes.display_name = name;
+  if (!opinion && name && name.length <= 120 && name !== entity.display_name) {
+    // The reviewer has to have actually said it. A proposed name must share a
+    // real word with the note, or it came from the page rather than from them.
+    const said = new Set(clean.toLowerCase().match(/[a-z0-9]{4,}/g) || []);
+    if ((name.toLowerCase().match(/[a-z0-9]{4,}/g) || []).some((w) => said.has(w))) {
+      changes.display_name = name;
+    } else {
+      rejected.push(`name "${name}" is not something the note asked for`);
+    }
+  }
 
   const niche = String(parsed.niche || '').trim();
-  if (niche && niche !== entity.niche) {
+  if (!opinion && niche && niche !== entity.niche) {
     if (NICHES[niche]) changes.niche = niche;
     else rejected.push(`niche "${niche}" is not one of the known categories`);
   }
 
   const email = String(parsed.contact_email || '').trim().toLowerCase();
-  if (email && email !== entity.contact_email) {
+  if (!opinion && email && email !== entity.contact_email) {
     if (!isUsableEmail(email)) {
       rejected.push(`address "${email}" is not a usable address`);
     } else {
@@ -134,19 +158,42 @@ export async function applyCorrection(env, db, entityId, note, { reviewer = 'das
     ).bind(...cols.map((c) => changes[c]), entityId).run();
   }
 
-  // Recorded whether or not anything changed, as an audit trail of what was
-  // corrected and by whom. Deliberately NOT fed to deriveLessons: "it sells tea,
-  // not skincare" is a fact about the record, and reading it as a reason to
-  // avoid tea shops would be exactly wrong. The lead is re-scored instead.
+  // What a note MEANS depends on whether it changed anything.
+  //
+  // If it corrected a fact, it is a correction: the record was wrong and is now
+  // right, and the lead is re-scored as the business it actually is. That note
+  // must never become a lesson — "it sells tea, not skincare" is a fact about
+  // one record, and reading it as a reason to avoid tea shops would be exactly
+  // backwards.
+  //
+  // If it changed nothing, the reviewer was not fixing data. They were telling
+  // us something about whether this lead is worth having, which is precisely
+  // what the ranking is built from. So it goes in as a judgement, is read by
+  // deriveLessons like any skip reason, and reranks this lead immediately.
+  const changed = fields.filter((f) => f !== 'updated_at' && f !== 'last_evaluated_at');
+  const isCorrection = changed.length > 0;
+
   await recordFeedback(db, {
-    entityId, outreachId: null, decision: 'CORRECTED',
-    reason: `${clean}${parsed.summary ? ` — applied: ${parsed.summary}` : ''}`,
+    entityId,
+    outreachId: null,
+    decision: isCorrection ? 'CORRECTED' : 'NOTE',
+    reason: isCorrection && parsed.summary ? `${clean} — applied: ${parsed.summary}` : clean,
     reviewer,
   });
 
+  // A judgement should move the score now, not at the next queue build, so the
+  // reviewer sees their note land.
+  let reranked = null;
+  if (!isCorrection) {
+    const r = await rerankOne(env, db, entityId, clean);
+    if (r.ok) reranked = { from: r.from, to: r.to };
+  }
+
   return {
     ok: true,
-    changed: fields.filter((f) => f !== 'updated_at' && f !== 'last_evaluated_at'),
+    changed,
+    kind: isCorrection ? 'correction' : 'judgement',
+    reranked,
     summary: String(parsed.summary || '').slice(0, 300),
     rejected,
   };

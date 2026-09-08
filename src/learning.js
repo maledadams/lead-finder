@@ -63,6 +63,11 @@ export async function deriveLessons(env, db, { minBatch = 3, limit = 25 } = {}) 
   //
   // A correction still teaches: it rewrites the record and clears
   // last_evaluated_at, so the lead is re-scored as the business it actually is.
+  //
+  // NOTE is the other half of that. A note that changed no field was not
+  // fixing data — it was the reviewer saying something about whether this lead
+  // is worth having, which is exactly what the ranking is built from. Those are
+  // read here alongside skip reasons.
   const { results } = await db
     .prepare(
       `SELECT f.id, f.decision, f.reason, f.niche_at_time, f.score_at_time,

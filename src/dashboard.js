@@ -805,12 +805,20 @@ document.addEventListener('keydown', async (ev) => {
   el.disabled = true;
   try {
     const res = await post('/api/entity/' + card.dataset.eid + '/correct', {note});
-    const changed = (res.changed || []).length
-      ? 'Fixed ' + res.changed.join(', ')
-      : 'Noted — nothing needed changing';
-    flash(res.rejected?.length ? changed + ' (' + res.rejected[0] + ')' : changed);
+    let said;
+    if (res.changed?.length) {
+      said = 'Fixed ' + res.changed.join(' and ').replace(/_/g, ' ') + ' — rescoring';
+    } else if (res.reranked) {
+      // A judgement, not a correction. Say what it moved so it never looks
+      // like nothing happened.
+      said = 'Noted — score ' + res.reranked.from + ' → ' + res.reranked.to;
+    } else {
+      said = 'Noted — it will shape future scoring';
+    }
+    if (res.rejected?.length) said += ' (' + res.rejected[0] + ')';
+    flash(said);
     el.value = '';
-    setTimeout(()=>location.reload(), 1400);
+    setTimeout(()=>location.reload(), 1800);
   } catch(e){ el.disabled = false; flash(e.message); }
 });
 

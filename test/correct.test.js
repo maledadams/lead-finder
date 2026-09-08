@@ -94,3 +94,43 @@ test('a missing entity is reported', async () => {
   const h = harness({ display_name: null, niche: null, contact_email: null, summary: '' });
   assert.deepEqual(await applyCorrection(h.env, h.db, 'nope', 'anything'), { ok: false, error: 'not-found' });
 });
+
+// ---------------------------------------------------------------------------
+// What a note MEANS depends on whether it changed anything.
+// ---------------------------------------------------------------------------
+
+test('a note that changes nothing becomes a ranking judgement', async () => {
+  // "too corporate for me" is not a fact to fix — it is the reviewer saying
+  // this lead is not worth having, which is what the ranking is built from.
+  const h = harness({ display_name: null, niche: null, contact_email: null, summary: 'no change' });
+  h.env.AI.run = async (_m, opts) => {
+    const asked = JSON.stringify(opts).includes('Adjust the score');
+    return { response: asked ? { score: 30, reason: 'reviewer finds it too corporate' }
+      : { display_name: null, niche: null, contact_email: null, summary: 'no change' } };
+  };
+
+  const res = await applyCorrection(h.env, h.db, 'e1', 'too corporate for me, not the kind of work I want');
+  assert.equal(res.ok, true);
+  assert.equal(res.kind, 'judgement');
+  assert.deepEqual(res.changed, []);
+
+  const f = h.raw.prepare("SELECT decision, reason FROM feedback WHERE entity_id='e1'").get();
+  assert.equal(f.decision, 'NOTE', 'must be readable by deriveLessons');
+  assert.match(f.reason, /too corporate/);
+});
+
+test('a note that fixes a fact is a correction, and never becomes a lesson', async () => {
+  const h = harness({
+    display_name: 'Fettle Botanic', niche: 'food_bev', contact_email: null, summary: 'sells tea',
+  });
+  const res = await applyCorrection(h.env, h.db, 'e1', 'its fettle botanic and it sells tea');
+  assert.equal(res.kind, 'correction');
+  assert.equal(h.raw.prepare("SELECT decision FROM feedback WHERE entity_id='e1'").get().decision, 'CORRECTED');
+});
+
+test('the lesson query reads judgements but not corrections', async () => {
+  const src = readFileSync(new URL('../src/learning.js', import.meta.url), 'utf8');
+  const where = src.slice(src.indexOf('FROM feedback f'), src.indexOf('ORDER BY f.created_at'));
+  assert.match(where, /NOT IN \('BOUNCED','CORRECTED'\)/);
+  assert.doesNotMatch(where, /'NOTE'/, "a plain note must not be excluded — it is the ranking signal");
+});
