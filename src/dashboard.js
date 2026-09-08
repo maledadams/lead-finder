@@ -285,10 +285,7 @@ function card(r, CAN_SEND = false, profile = null) {
     <button data-copy="1">Copy email</button>
     ${CAN_SEND ? '<button data-act="sent">Already sent it myself</button>' : ''}
     <button class="no" data-open="reason">Skip &hellip;</button>
-    <span class="notes"><span class="nlab">Notes:</span><input class="npill"
-      data-field="note" placeholder="what did it get wrong?" maxlength="200"
-      autocomplete="off" aria-label="Correct this record"><button class="nsend"
-      data-act="note" title="Send this note">Send note</button></span>
+    ${noteControl()}
   </div>
 
   ${editor(r)}
@@ -425,6 +422,20 @@ ${pages > 1 ? pager(current, pages) : ''}
 `;
 }
 
+/**
+ * The note field, the one way the system is corrected.
+ *
+ * On a history row it lives in the right-hand column under the date and the
+ * address, laid out horizontally, because that column is where the facts about
+ * this send are and a correction is a fact about this send.
+ */
+function noteControl() {
+  return `<span class="notes"><span class="nlab">Notes:</span><input class="npill"
+      data-field="note" placeholder="what did it get wrong?" maxlength="200"
+      autocomplete="off" aria-label="Correct this record"><button class="nsend"
+      data-act="note" title="Send this note">Send note</button></span>`;
+}
+
 function historyRow(r, view) {
   const when = view === 'sent' ? r.sent_at : view === 'bounced' ? r.bounced_at : r.queue_date;
   const blocked = String(r.decision || '') === 'BLOCKED';
@@ -443,10 +454,9 @@ function historyRow(r, view) {
       ${r.contact_email ? `<span class="dim">${esc(r.contact_email)}</span>` : '<span class="warn">no address on file</span>'}
       <button class="link" data-open="email">${r.contact_email ? 'change' : 'add an address'}</button>
     </div>
-    ${emailDrawer(r, { open: view === 'bounced' && !r.contact_email })}
+    ${emailDrawer(r)}
     ${view === 'skipped' && r.reason ? `<div class="why sm"><b>Reason:</b> ${esc(r.reason)}</div>` : ''}
     ${view === 'bounced' && r.send_error ? `<div class="why sm"><b>Bounce:</b> ${esc(r.send_error)}</div>` : ''}
-    ${view === 'bounced' ? bouncedContact(r) : ''}
     <details>
       <summary>The email</summary>
       <div class="mail">${esc(r.body)}</div>
@@ -457,6 +467,7 @@ function historyRow(r, view) {
     <div class="when">${esc(short(when))}</div>
     ${view === 'sent' && r.sent_via ? `<div class="dim sm">via ${esc(r.sent_via)}</div>` : ''}
     ${view === 'sent' && r.contact_email ? `<div class="dim sm">${esc(r.contact_email)}</div>` : ''}
+    ${noteControl()}
   </div>
 </div>`;
 }
@@ -481,14 +492,6 @@ function emailDrawer(r, { open = false } = {}) {
       ${open ? '' : '<button data-act="cancel">Cancel</button>'}
     </div>
   </div>`;
-}
-
-/** On a bounced lead, say what to do next. The editor itself is on the row. */
-function bouncedContact(r) {
-  return r.contact_email
-    ? `<div class="why sm"><b>New address:</b> ${esc(r.contact_email)} —
-       put it back in the queue to send.</div>`
-    : '<div class="why sm">No address on file. Add one below to bring this business back.</div>';
 }
 
 const STATUS_LABEL = {
@@ -523,29 +526,17 @@ function rowActions(r, view) {
       ${btn('GHOSTED', 'Ghosted')}
       ${st ? '<button data-act="status" data-status="">Clear</button>' : ''}
       <button class="no" data-open="bounce">It bounced&hellip;</button>
-      <span class="notes"><span class="nlab">Notes:</span><input class="npill"
-      data-field="note" placeholder="what did it get wrong?" maxlength="200"
-      autocomplete="off" aria-label="Correct this record"><button class="nsend"
-      data-act="note" title="Send this note">Send note</button></span>
     </div>${bounceDrawer()}`;
   }
   if (view === 'skipped') {
     return `<div class="acts">
       <button data-act="revive">Edit &amp; put back in the queue</button>
-      <span class="notes"><span class="nlab">Notes:</span><input class="npill"
-      data-field="note" placeholder="what did it get wrong?" maxlength="200"
-      autocomplete="off" aria-label="Correct this record"><button class="nsend"
-      data-act="note" title="Send this note">Send note</button></span>
     </div>`;
   }
   // bounced: only offer the requeue once there is somewhere to send it.
   return `<div class="acts">
     <button data-act="revive"${r.contact_email ? '' : ' disabled'}>Edit &amp; put back in the queue</button>
     ${r.contact_email ? '' : '<span class="dim sm">needs an address first</span>'}
-    <span class="notes"><span class="nlab">Notes:</span><input class="npill"
-      data-field="note" placeholder="what did it get wrong?" maxlength="200"
-      autocomplete="off" aria-label="Correct this record"><button class="nsend"
-      data-act="note" title="Send this note">Send note</button></span>
   </div>`;
 }
 
@@ -741,10 +732,15 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
         font-size:13.5px;line-height:1.7;margin-top:8px;width:100%;display:block}
 
   .rows{border-top:1px solid var(--line);margin-top:18px}
-  .row{display:grid;grid-template-columns:1fr auto;gap:6px 20px;padding:15px 4px;
+  .row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 20px;padding:15px 4px;
        border-bottom:1px solid var(--line)}
   .rmain{min-width:0} .subj{margin-top:2px}
-  .rmeta{text-align:right;white-space:nowrap}
+  .rmeta{display:flex;flex-direction:column;align-items:flex-end;gap:3px;
+         text-align:right;white-space:nowrap}
+  /* The note field sits under the date and the address, in the same column and
+     laid out horizontally. */
+  .rmeta .notes{margin:8px 0 0;width:auto}
+  .rmeta .npill{flex:0 1 180px;min-width:130px}
   .when{font-size:13px;font-variant-numeric:tabular-nums}
   .row .pill{margin-left:0}
 
@@ -882,7 +878,9 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
     .plab{display:none}
     .nav .n{margin-left:6px}
     .main{padding:18px 16px 90px}
-    .row{grid-template-columns:1fr} .rmeta{text-align:left}
+    .row{grid-template-columns:1fr}
+    .rmeta{align-items:flex-start;text-align:left}
+    .rmeta .notes{width:100%}
     .grid.stats{grid-template-columns:1fr}
     .seg{margin-left:0;width:100%;overflow-x:auto}
   }
