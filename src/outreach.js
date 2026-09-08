@@ -270,7 +270,7 @@ function composeNoWebsiteDraft(entity, env, persona) {
  */
 /** Whoever is actually sending. SENDER_NAME is set in wrangler.toml. */
 export function senderName(env) {
-  return stripControl(env?.SENDER_NAME) || 'Lucía Adams';
+  return stripControl(env?.SENDER_NAME) || '[SET SENDER_NAME]';
 }
 
 function signature(env) {

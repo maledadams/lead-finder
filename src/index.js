@@ -214,13 +214,6 @@ export default {
       return json({ error: 'unavailable' }, 503);
     }
 
-    // When REQUIRE_ACCESS is on, a request must arrive through Cloudflare
-    // Access. Anything hitting the workers.dev hostname directly is refused,
-    // which closes the bypass that would otherwise make Access decorative.
-    if (env.REQUIRE_ACCESS === 'true' && !hasAccessAssertion(request)) {
-      return json({ error: 'access required' }, 403);
-    }
-
     // ---- Zoho OAuth callback --------------------------------------------
     // Outside the auth gate on purpose: Zoho sends the browser here with only
     // ?code and ?state, so requiring the dashboard key would reject the one
@@ -260,6 +253,18 @@ export default {
       if (url.pathname === '/auth/callback') return completeLogin(env, request);
       if (url.pathname === '/auth/logout') return logout();
       return json({ error: 'not found' }, 404);
+    }
+
+    // When REQUIRE_ACCESS is on, a request must arrive through Cloudflare
+    // Access. Anything reaching the Worker another way is refused, which closes
+    // the bypass that would otherwise make Access decorative.
+    //
+    // Deliberately placed AFTER the OAuth callbacks. Those are requests from
+    // Zoho's and Google's servers, which have no Access session and never
+    // could; gating them here would 403 the callback and make reconnecting
+    // Zoho impossible. Each is already protected by its own signed state.
+    if (env.REQUIRE_ACCESS === 'true' && !hasAccessAssertion(request)) {
+      return json({ error: 'access required' }, 403);
     }
 
     // Three ways in, in order of preference.
