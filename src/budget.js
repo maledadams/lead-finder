@@ -1,27 +1,32 @@
 // Circuit breaker. Every expensive operation asks permission here first.
 //
-// Counters are per-UTC-day rows in D1. Two reads and one write per run, not
-// per operation — the count is held in memory for the invocation and flushed
-// at the end, so the breaker itself costs almost nothing.
+// Counters are per-profile, per-UTC-day rows in D1. Two reads and one write per
+// run, not per operation — the count is held in memory for the invocation and
+// flushed at the end, so the breaker itself costs almost nothing.
+//
+// Per profile, so a large crawl for one cannot exhaust another's allowance and
+// so the spend on the Metrics page is honestly attributable.
 
 export function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
 export class Budget {
-  constructor(db, limits) {
+  constructor(db, limits, profileId) {
     this.db = db;
+    this.profileId = profileId;
     this.limits = limits;      // { fetch: n, ai: n }
     this.used = {};            // loaded from D1
     this.delta = {};           // accumulated this invocation
     this.day = today();
   }
 
-  static async load(db, limits) {
-    const b = new Budget(db, limits);
+  static async load(db, limits, profileId) {
+    if (!profileId) throw new Error('Budget.load needs a profileId');
+    const b = new Budget(db, limits, profileId);
     const { results } = await db
-      .prepare('SELECT metric, used FROM budget WHERE day = ?')
-      .bind(b.day)
+      .prepare('SELECT metric, used FROM budget WHERE profile_id = ? AND day = ?')
+      .bind(profileId, b.day)
       .all();
     for (const r of results || []) b.used[r.metric] = r.used;
     return b;
@@ -53,10 +58,10 @@ export class Budget {
       metrics.map((m) =>
         this.db
           .prepare(
-            `INSERT INTO budget (day, metric, used) VALUES (?,?,?)
-             ON CONFLICT(day, metric) DO UPDATE SET used = used + excluded.used`
+            `INSERT INTO budget (profile_id, day, metric, used) VALUES (?,?,?,?)
+             ON CONFLICT(profile_id, day, metric) DO UPDATE SET used = used + excluded.used`
           )
-          .bind(this.day, m, this.delta[m])
+          .bind(this.profileId, this.day, m, this.delta[m])
       )
     );
     for (const m of metrics) {

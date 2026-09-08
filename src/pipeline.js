@@ -29,7 +29,12 @@ import {
 import { ingestSeeds } from './discover.js';
 import { newId, nowIso, normalizeUrl, preferredName, resolveEntity } from './entity.js';
 
-export async function runCrawl(env, db) {
+export async function runCrawl(env, db, profile) {
+  // Every write below is tagged with this, and every read filtered by it. A
+  // crawl with no profile would silently pool two operations' leads together,
+  // so it fails here instead.
+  if (!profile?.id) throw new Error('runCrawl needs a profile');
+  const profileId = profile.id;
   const runId = newId();
   const startedAt = nowIso();
 
@@ -76,11 +81,11 @@ export async function runCrawl(env, db) {
       ai: num(env, 'DAILY_AI_BUDGET', 40),
       source: num(env, 'DAILY_SOURCE_QUERIES', 8),
       browser: num(env, 'DAILY_BROWSER_RENDERS', 20),
-    });
+    }, profileId);
 
     // Top the frontier up from automated sources before doing anything else,
     // so the crawl never runs dry and never needs a human to feed it.
-    stats.source = await topUpFrontier(env, db, budget, discoveryOutOfTime);
+    stats.source = await topUpFrontier(env, db, budget, discoveryOutOfTime, profile);
 
     const fetcher = new Fetcher(env.USER_AGENT);
     const minPrescore = num(env, 'MIN_PRESCORE_FOR_AI', 45);
@@ -179,7 +184,8 @@ export async function runCrawl(env, db) {
  * the work and the CT sweep is a floor rather than the main channel. Keywords
  * rotate least-recently-used, so the whole list gets covered over time.
  */
-async function topUpFrontier(env, db, budget, outOfTime = () => false) {
+async function topUpFrontier(env, db, budget, outOfTime = () => false, profile = null) {
+  const profileId = profile?.id || budget.profileId;
   const out = {
     osm: { metros: [], businesses: 0, new_entities: 0, errors: 0 },
     ct: { keywords: [], domains_found: 0, frontier_added: 0, errors: 0 },
@@ -187,7 +193,7 @@ async function topUpFrontier(env, db, budget, outOfTime = () => false) {
 
   const lowWater = num(env, 'FRONTIER_LOW_WATER', 150);
   const pending = await db
-    .prepare("SELECT COUNT(*) AS n FROM crawl_frontier WHERE status = 'PENDING'")
+    .prepare("SELECT COUNT(*) AS n FROM crawl_frontier WHERE profile_id = ? AND status = 'PENDING'").bind(profileId)
     .first();
 
   if (!budget.canSpend('source')) return { ...out, skipped: 'source-budget-exhausted' };
@@ -244,7 +250,7 @@ async function topUpFrontier(env, db, budget, outOfTime = () => false) {
   // --- Certificate Transparency, to top up if still thin ------------------
   // Unlike OSM, this only produces URLs, so frontier depth is the right gate.
   const stillPending = await db
-    .prepare("SELECT COUNT(*) AS n FROM crawl_frontier WHERE status = 'PENDING'")
+    .prepare("SELECT COUNT(*) AS n FROM crawl_frontier WHERE profile_id = ? AND status = 'PENDING'").bind(profileId)
     .first();
   if ((stillPending?.n || 0) >= lowWater) return out;
 
@@ -374,7 +380,7 @@ async function processOne(env, db, ctx) {
   // --- resolve to an entity (dedup happens here) ------------------------
   let entityId = target.kind === 'stale' ? target.row.id : null;
   if (!entityId) {
-    const resolved = await resolveEntity(db, {
+    const resolved = await resolveEntity(db, profileId, {
       website: res.finalUrl || url,
       display_name: signals.og_site_name || cleanTitle(signals.title) || null,
       instagram: signals.socials?.instagram,

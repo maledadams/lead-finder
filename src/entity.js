@@ -288,7 +288,8 @@ export async function mergeEntities(db, winnerId, loserId) {
  *
  * Returns { id, created, merged }.
  */
-export async function resolveEntity(db, candidate) {
+export async function resolveEntity(db, profileId, candidate) {
+  if (!profileId) throw new Error('resolveEntity needs a profileId');
   const { keys, strong, weak, domain, ig, tt, etsy, email } = identityKeys(candidate);
   if (!keys.length) return { id: null, created: false, merged: 0, reason: 'no-identity' };
 
@@ -306,6 +307,20 @@ export async function resolveEntity(db, candidate) {
 
   const matchedIds = [...strongIds];
 
+  // Already known? Then it belongs to whichever profile discovered it, and this
+  // one leaves it alone — even when that is a different profile. Two profiles
+  // both pitching the same business would mean one person receiving two
+  // unrelated cold emails from the same sender.
+  if (matchedIds.length) {
+    const owner = await db.prepare(
+      `SELECT id, profile_id FROM entities WHERE id IN (${matchedIds.map(() => '?').join(',')})
+       ORDER BY first_seen_at ASC LIMIT 1`
+    ).bind(...matchedIds).first();
+    if (owner && owner.profile_id && owner.profile_id !== profileId) {
+      return { id: owner.id, created: false, merged: 0, reason: 'owned-by-another-profile' };
+    }
+  }
+
   let entityId;
   let created = false;
   let merged = 0;
@@ -317,14 +332,15 @@ export async function resolveEntity(db, candidate) {
     await db
       .prepare(
         `INSERT INTO entities
-           (id, display_name, founder_name, website, domain, instagram, tiktok,
-            etsy, niche, location_text, country, contact_email, contact_source,
-            state, discovery_source, discovered_via, phone, osm_tags,
-            has_website, first_seen_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+           (id, profile_id, display_name, founder_name, website, domain, instagram,
+            tiktok, etsy, niche, location_text, country, contact_email,
+            contact_source, state, discovery_source, discovered_via, phone,
+            osm_tags, has_website, first_seen_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .bind(
         entityId,
+        profileId,
         candidate.display_name || null,
         candidate.founder_name || null,
         candidate.website ? normalizeUrl(candidate.website) : null,

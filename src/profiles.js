@@ -1,0 +1,299 @@
+// Profiles: separate outreach operations sharing one deployment.
+//
+// Switching profile should feel like switching account. Leads, drafts, replies,
+// lessons, keywords, frontier, spend and every metric belong to exactly one
+// profile. The plumbing is shared: one mailbox, one Cloudflare account, one
+// database, one booking calendar, one send cap.
+//
+// TWO THINGS ARE SHARED ON PURPOSE, and both would be wrong to split.
+//
+//   Dedup. entity_keys is unique across the whole database, so a business
+//   belongs to whichever profile discovered it first and every other profile
+//   skips it. Splitting that would let one person receive two different pitches
+//   from the same sender, which is the worst thing this system could do to a
+//   sending reputation.
+//
+//   The send cap. One mailbox has one reputation. Two profiles sending thirty
+//   each is sixty cold emails a day from one address, and if that reputation
+//   goes, both profiles stop landing.
+//
+// Configuration lives as JSON on the profile row rather than as constants,
+// because it is the part that differs. Anything a profile has not defined falls
+// back to the built-in creative defaults, so the original profile keeps working
+// untouched and a new profile only has to specify what makes it different.
+
+import { NICHES as DEFAULT_NICHES, AI_MODEL } from './config.js';
+import { METROS as DEFAULT_METROS } from './osm.js';
+import { PERSONAS as DEFAULT_PERSONAS } from './outreach.js';
+import { newId, nowIso } from './entity.js';
+
+export const DEFAULT_PROFILE_ID = 'p-creative';
+
+const json = (v, fallback) => {
+  if (!v) return fallback;
+  try {
+    const parsed = JSON.parse(v);
+    return parsed && (Array.isArray(parsed) ? parsed.length : Object.keys(parsed).length)
+      ? parsed : fallback;
+  } catch { return fallback; }
+};
+
+/** Every profile, default first. */
+export async function listProfiles(db) {
+  const { results } = await db.prepare(
+    `SELECT id, slug, name, active, is_default FROM profiles
+     WHERE active = 1 ORDER BY is_default DESC, name`
+  ).all();
+  return results || [];
+}
+
+/**
+ * The profile a request is operating on.
+ *
+ * A slug wins when it names a real one, otherwise the default. Never returns
+ * null: every query in the system is scoped by this, so a missing profile has
+ * to fail loudly here rather than quietly widening a query to everything.
+ */
+export async function resolveProfile(db, slug = null) {
+  if (slug) {
+    const hit = await db.prepare(
+      'SELECT * FROM profiles WHERE slug = ? AND active = 1'
+    ).bind(String(slug)).first();
+    if (hit) return withConfig(hit);
+  }
+  const def = await db.prepare(
+    'SELECT * FROM profiles WHERE active = 1 ORDER BY is_default DESC, created_at LIMIT 1'
+  ).first();
+  if (!def) throw new Error('no active profile — run migration 008');
+  return withConfig(def);
+}
+
+export async function profileById(db, id) {
+  const row = await db.prepare('SELECT * FROM profiles WHERE id = ?').bind(id).first();
+  return row ? withConfig(row) : null;
+}
+
+/**
+ * A profile row plus its resolved configuration.
+ *
+ * Anything unset falls back to the built-in creative defaults, which is what
+ * lets the original profile carry on with no stored config at all.
+ */
+export function withConfig(row) {
+  return {
+    ...row,
+    niches: json(row.niches, DEFAULT_NICHES),
+    personas: json(row.personas, DEFAULT_PERSONAS),
+    seedKeywords: json(row.seed_keywords, null),
+    metros: json(row.metros, DEFAULT_METROS),
+    budgets: json(row.budgets, null),
+    discovery: json(row.discovery, null),
+    aiSystem: row.ai_system || null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Creating one
+// ---------------------------------------------------------------------------
+
+const SCHEMA = {
+  name: 'profile_config',
+  strict: true,
+  schema: {
+    type: 'object',
+    properties: {
+      ai_system: { type: 'string' },
+      niches: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            slug: { type: 'string' },
+            label: { type: 'string' },
+            keywords: { type: 'array', items: { type: 'string' } },
+            persona_context: { type: 'string' },
+            subject: { type: 'string' },
+          },
+          required: ['slug', 'label', 'keywords', 'persona_context', 'subject'],
+          additionalProperties: false,
+        },
+      },
+      seed_keywords: { type: 'array', items: { type: 'string' } },
+      osm: {
+        type: 'object',
+        properties: {
+          amenity: { type: 'array', items: { type: 'string' } },
+          healthcare: { type: 'array', items: { type: 'string' } },
+          craft: { type: 'array', items: { type: 'string' } },
+          shop: { type: 'array', items: { type: 'string' } },
+          office: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['amenity', 'healthcare', 'craft', 'shop', 'office'],
+        additionalProperties: false,
+      },
+    },
+    required: ['ai_system', 'niches', 'seed_keywords', 'osm'],
+    additionalProperties: false,
+  },
+};
+
+function prompt(name, brief) {
+  return `Configure a cold-outreach profile for a freelance web developer who builds
+custom coded websites and internal systems — never Shopify, Wix or a site builder.
+
+PROFILE NAME: ${name}
+WHAT THEY WANT TO REACH:
+${brief}
+
+Produce configuration for finding and writing to these businesses in the United States.
+
+ai_system: the brief a scoring model is judged against. Say who is a good fit,
+who is not, and what disqualifies a business outright. Write it as instructions,
+in the second person, 120 words or fewer.
+
+niches: between two and six categories these businesses fall into. For each:
+  slug         lower_snake_case
+  label        how a person would say it
+  keywords     15-40 terms found on such a business's own website. These decide
+               which category a crawled site belongs to.
+  persona_context  one sentence the sender uses to say what they do FOR THIS
+               kind of business. First person, plain, no salesmanship. It
+               follows "I'm <name>." in the email.
+  subject      an email subject line with {name} where the business name goes.
+
+seed_keywords: 20-40 search terms for finding these businesses. Concrete trade
+and specialty terms, not adjectives.
+
+osm: OpenStreetMap tag values that identify these businesses. Use real OSM
+values only, and leave an array empty when nothing fits. amenity (eg dentist,
+doctors, clinic), healthcare (eg physiotherapist, dentist), craft (eg plumber,
+electrician, hvac, carpenter), shop, office (eg logistics, courier, estate_agent).`;
+}
+
+/**
+ * Generate a profile from a sentence describing who to reach.
+ *
+ * The model writes the configuration; this validates every part of it before a
+ * row exists. A profile with an invented OSM tag or a missing persona would
+ * fail silently at crawl time, days later, which is the worst place to find out.
+ */
+export async function createProfile(env, db, { name, brief, slug = null }) {
+  const cleanName = String(name || '').trim().slice(0, 80);
+  const cleanBrief = String(brief || '').trim();
+  if (cleanName.length < 2) return { ok: false, error: 'give the profile a name' };
+  if (cleanBrief.length < 40) {
+    return { ok: false, error: 'describe who you want to reach in a sentence or two' };
+  }
+
+  const wanted = (slug || cleanName).toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '').slice(0, 40);
+  if (!wanted) return { ok: false, error: 'that name has no usable slug in it' };
+  const clash = await db.prepare('SELECT id FROM profiles WHERE slug = ?').bind(wanted).first();
+  if (clash) return { ok: false, error: `a profile called "${wanted}" already exists` };
+
+  let cfg;
+  try {
+    const res = await env.AI.run(AI_MODEL, {
+      messages: [
+        { role: 'system', content: 'You configure lead-generation systems. You are concrete and you never invent OpenStreetMap tags.' },
+        { role: 'user', content: prompt(cleanName, cleanBrief) },
+      ],
+      max_tokens: 2200,
+      temperature: 0.3,
+      response_format: { type: 'json_schema', json_schema: SCHEMA },
+    });
+    const raw = res?.response ?? res;
+    cfg = typeof raw === 'object' ? raw
+      : JSON.parse(String(raw).slice(String(raw).indexOf('{'), String(raw).lastIndexOf('}') + 1));
+  } catch (err) {
+    return { ok: false, error: `model: ${String(err?.message || err).slice(0, 140)}` };
+  }
+
+  const problems = [];
+  const niches = {};
+  const personas = {};
+  for (const n of Array.isArray(cfg?.niches) ? cfg.niches : []) {
+    const s = String(n?.slug || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+    const kw = (Array.isArray(n?.keywords) ? n.keywords : [])
+      .map((k) => String(k).toLowerCase().trim()).filter((k) => k.length > 2);
+    if (!s || !n?.label || kw.length < 5) { problems.push(`niche "${n?.slug}" is too thin`); continue; }
+    niches[s] = { label: String(n.label).slice(0, 60), keywords: [...new Set(kw)].slice(0, 60) };
+    personas[s] = {
+      label: String(n.label).slice(0, 60),
+      context: String(n.persona_context || '').slice(0, 300),
+      subject: String(n.subject || '{name} — a few notes on your site').slice(0, 120),
+    };
+  }
+  if (!Object.keys(niches).length) {
+    return { ok: false, error: `the model produced no usable categories (${problems.join('; ') || 'none returned'})` };
+  }
+
+  const seeds = [...new Set((Array.isArray(cfg?.seed_keywords) ? cfg.seed_keywords : [])
+    .map((k) => String(k).toLowerCase().trim()).filter((k) => k.length > 2))].slice(0, 60);
+
+  const osm = {};
+  for (const field of ['amenity', 'healthcare', 'craft', 'shop', 'office']) {
+    osm[field] = [...new Set((Array.isArray(cfg?.osm?.[field]) ? cfg.osm[field] : [])
+      // OSM values are lower_snake_case; anything else is invented.
+      .map((v) => String(v).toLowerCase().trim().replace(/[^a-z0-9_]/g, ''))
+      .filter(Boolean))].slice(0, 24);
+  }
+  if (!Object.values(osm).some((a) => a.length) && !seeds.length) {
+    return { ok: false, error: 'no way to discover these businesses was produced — try a more concrete brief' };
+  }
+
+  const id = `p-${wanted}`;
+  const ts = nowIso();
+  await db.prepare(
+    `INSERT INTO profiles
+       (id, slug, name, active, is_default, brief, ai_system, niches, personas,
+        seed_keywords, metros, budgets, discovery, created_at, updated_at)
+     VALUES (?,?,?,1,0,?,?,?,?,?,NULL,NULL,?,?,?)`
+  ).bind(
+    id, wanted, cleanName, cleanBrief,
+    String(cfg.ai_system || '').slice(0, 1600) || null,
+    JSON.stringify(niches), JSON.stringify(personas), JSON.stringify(seeds),
+    JSON.stringify({ osm }), ts, ts
+  ).run();
+
+  // Discovery starts from these. Seeded here rather than on first crawl so the
+  // profile is not silently empty until the next cron tick.
+  if (seeds.length) {
+    await db.batch(seeds.map((k) => db.prepare(
+      `INSERT OR IGNORE INTO keywords (profile_id, keyword, niche, source, status, added_at)
+       VALUES (?,?,NULL,'profile-seed','UNVALIDATED',?)`
+    ).bind(id, k, ts)));
+  }
+
+  return {
+    ok: true,
+    id,
+    slug: wanted,
+    niches: Object.keys(niches),
+    seed_keywords: seeds.length,
+    osm_tags: Object.fromEntries(Object.entries(osm).filter(([, v]) => v.length)),
+    warnings: problems,
+  };
+}
+
+export async function setDefaultProfile(db, id) {
+  const row = await db.prepare('SELECT id FROM profiles WHERE id = ?').bind(id).first();
+  if (!row) return { ok: false, error: 'not-found' };
+  await db.batch([
+    db.prepare('UPDATE profiles SET is_default = 0'),
+    db.prepare('UPDATE profiles SET is_default = 1, updated_at = ? WHERE id = ?').bind(nowIso(), id),
+  ]);
+  return { ok: true };
+}
+
+/** Per-profile daily crawl allowance, falling back to the deployment default. */
+export function budgetsFor(profile, env) {
+  const b = profile?.budgets || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  return {
+    fetch: num(b.fetch, num(env?.DAILY_FETCH_BUDGET, 900)),
+    ai: num(b.ai, num(env?.DAILY_AI_BUDGET, 75)),
+    source: num(b.source, num(env?.DAILY_SOURCE_QUERIES, 24)),
+    browser: num(b.browser, num(env?.DAILY_BROWSER_RENDERS, 30)),
+  };
+}

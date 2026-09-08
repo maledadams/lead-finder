@@ -75,13 +75,14 @@ CREATE INDEX IF NOT EXISTS idx_entities_has_website ON entities(has_website);
 -- hit means we already know this business. This is what stops the same brand
 -- entering as four leads via site + Instagram + TikTok + Etsy.
 -- ---------------------------------------------------------------------------
+-- Deliberately unique across the WHOLE database, not per profile: a business
+-- belongs to whichever profile discovered it first and the others skip it, so
+-- nobody receives two different pitches from the same sender.
 CREATE TABLE IF NOT EXISTS entity_keys (
-  profile_id TEXT NOT NULL,            -- dedup is per profile, see migration 008
-  key        TEXT NOT NULL,            -- e.g. "domain:cutebrand.com"
+  key        TEXT PRIMARY KEY,         -- e.g. "domain:cutebrand.com"
   kind       TEXT NOT NULL,            -- domain | instagram | tiktok | etsy | email | name
   entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (profile_id, key)
+  created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_entity_keys_entity ON entity_keys(entity_id);
@@ -386,6 +387,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   seed_keywords TEXT,   -- [] bootstrap terms for discovery
   metros        TEXT,   -- [] where to look, for local businesses
   budgets       TEXT,   -- {fetch, ai, source, browser} per day
+  discovery     TEXT,   -- {osm:{shop,craft,amenity,healthcare,office},exclude,metros}
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
