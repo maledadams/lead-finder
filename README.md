@@ -1,392 +1,388 @@
-# lead finder
+# Lead Finder — self-hosted lead generation and cold outreach on Cloudflare Workers
 
-A persistent prospecting system for founder-led creative businesses in the US.
-Runs entirely on Cloudflare. Your Mac can be off.
+**Lead Finder is an open-source prospecting system that finds small businesses
+that need your services, scores them against your own taste, drafts a personal
+email to each one, and puts them in front of you to approve — one at a time.**
+It runs entirely on Cloudflare's free-ish tier, on a schedule, with your
+computer switched off.
 
----
-
-## Discovery: fully automated, no manual seeding
-
-**You never have to find brands yourself.** Four channels, all automated, all
-legitimate, all running with your laptop off.
-
-| Channel | What it finds | Cost |
-|---|---|---|
-| **OpenStreetMap** (Overpass) | Physical creative businesses by city and category, each with a **verified US street address**. Rotates through 26 metros. | Free, no key |
-| **Certificate Transparency** (crt.sh) | Online-only brands, by keyword in the domain. A new certificate means a newly-launched business, so this catches brands as they appear. | Free, no key |
-| **Link-graph expansion** | The quality channel. Indie brands link to indie brands — stockists, "brands we love", collaborators, press. Finds abstractly-named brands ("Moth & Moon") that keyword matching structurally misses. | Free |
-| **Re-evaluation** | Known businesses whose signals changed. Compounds as the pool grows. | Free |
-
-### Where the keywords come from
-
-Not from me guessing. That was tried and it failed measurably: invented terms
-like `wheelthrown`, `cutecore`, `handpoured` and `gyaru` return **zero**
-certificates, while plain roots like `lolita` (2983), `emo` (491), `kawaii`
-(90), `harajuku` (68) and `decora` (64) are productive. A hand-written list
-looks right and finds nothing.
-
-So the vocabulary is harvested and then measured — see [`src/keywords.js`](src/keywords.js):
-
-1. **Harvest** — Wikipedia enumerates fashion subcultures, aesthetics and
-   garments in exactly the categories you care about. Free, keyless, and the
-   API exists to be queried. A run pulls ~1000 candidate terms.
-2. **Mine** — terms that recur on businesses already scored well, compared
-   against low scorers so ordinary retail words do not survive. This is the
-   self-improving half: the corpus teaches the crawler what your good leads
-   look like.
-3. **Validate** — every candidate is tested against real crt.sh yield before
-   it is ever used. Terms returning nothing are marked `DEAD` and never
-   queried again. A first batch killed 12 of 14, including a person's name
-   scraped out of a citation list.
-4. **Prune** — terms that return domains but never produce a lead are retired
-   after a few runs, and ambiguous common words (`camp` returns 4548
-   certificates, all campgrounds) are rejected before they cost a query.
-
-Categories beat article links, decisively. `Category:Punk fashion` yields
-`bondagepants`, `bovverboot`, `devilock`, `combatboot` — terms no corporation
-puts in a domain. Article links yield citations: `Lolita fashion` gave
-`lewiscarroll` and `sumireuesaka`.
-
-Inspect and steer it at `GET /api/keywords`; re-harvest with
-`POST /api/run/harvest`; validate in bulk with `POST /api/run/validate?limit=40`.
-
-### The niches you named
-
-All covered in the classifier, which decides *which persona writes the email*
-([`src/config.js`](src/config.js)): **emo, goth**, nu goth, pastel goth, punk,
-grunge, scene · **cutecore, cute**, kawaii, pastel, coquette, fairycore,
-dollette, sanrio · **Japanese-inspired** — harajuku, lolita (gothic/sweet/
-classic), jirai kei, visual kei, fairy kei, mori kei, dolly kei, yami kawaii,
-menhera, gyaru, decora, shironuri, jfashion · y2k, vintage, deadstock,
-upcycled, reworked, corsetry.
-
-Harvesting adds to this automatically — a recent run brought in `goblincore`,
-`kinderwhore`, `softgrunge`, `darkacademia`, `kogal`, `angelicpretty` (a real
-Lolita label) and `laforet` (the Harajuku mall).
-
-Seeding still exists in the dashboard, but it is optional — for when you spot
-something yourself and want it in the pipeline.
-
-### Why not Google Maps, Apify, or Crawlee
-
-You asked about all three. The short version:
-
-- **Scraping Google Maps** is JS-rendered (Workers has no browser) and against
-  Google's terms. Out of scope under this project's own safety rules.
-- **Google Places API** is legitimate and its free tier would cover this
-  volume, but it needs a billing account with a card on file — not "$0, no
-  paid APIs". OSM's Overpass gives the same axis, free and keyless. If you
-  ever want Places, it drops into `src/osm.js` as another source.
-- **Crawlee**, the open-source engine Apify runs on, is good software that
-  does not fit: it is a Node library needing a filesystem, long-running
-  processes and a real Chromium binary, so it would need a machine that stays
-  on. Its anti-blocking features — fingerprint spoofing, proxy and session
-  rotation — are detection evasion. And none of it produces a social login
-  that will not get banned.
-
-The way past that was not a better scraper. It was to stop trying to take this
-data from platforms that forbid it, and take it from sources that exist to be
-queried.
-
-### Honest limits
-
-- **Instagram, TikTok and Etsy still cannot be crawled.** Nothing here changes
-  that. What the system does instead is find the same businesses through their
-  websites, then pick their social handles up off those pages.
-- **OSM coverage is uneven** — dense in cities, thin in small towns, and a shop
-  with no `website` tag is invisible.
-- **crt.sh and Overpass are volunteer infrastructure.** They rate-limit and
-  return 406/504 unpredictably; the same query was observed failing twice then
-  succeeding. Overpass calls fall back across three mirrors and every failure
-  is treated as normal.
-- **Yield is noisy by design.** A sweep returns chains and off-target retail
-  alongside real finds. That is what the staged pipeline is for — it discards
-  most candidates for almost no cost.
+It is not a scraper you run by hand, and not a mail-merge tool. It is a
+persistent pipeline that gets better at picking leads the more you tell it why
+you skipped one.
 
 ---
 
-## Setup
+## Table of contents
+
+- [Who it is for](#who-it-is-for)
+- [What it does](#what-it-does)
+- [How it works](#how-it-works)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [Making it yours](#making-it-yours-the-part-that-is-not-configuration)
+- [The review dashboard](#the-review-dashboard)
+- [Metrics](#metrics)
+- [What it costs to run](#what-it-costs-to-run)
+- [Legal: CAN-SPAM and crawling](#legal-can-spam-and-crawling)
+- [Security model](#security-model)
+- [FAQ](#faq)
+- [Limitations](#limitations)
+
+---
+
+## Who it is for
+
+Freelancers and small studios who sell a service to small businesses, and whose
+best leads are findable on the open web: web designers, developers, brand
+studios, photographers, copywriters, marketing consultants, fractional
+operators.
+
+It works best when three things are true:
+
+1. **Your ideal customer is a small, independent business with a website** (or
+   conspicuously without one).
+2. **You can say why a lead is good or bad** in a sentence. The system learns
+   from those sentences.
+3. **You send a low volume of considered emails**, not thousands of templated
+   ones. The default ceiling is 30 a day and it is a hard cap.
+
+It is a poor fit for enterprise sales, for anything requiring intent data or
+firmographics you cannot see on a website, and for high-volume sequencing.
+
+## What it does
+
+| Stage | What happens |
+|---|---|
+| **Discovery** | Finds candidate businesses on its own from four sources. No lists to buy, no seeding by hand. |
+| **Deduplication** | One business is one record, no matter how many URLs, handles and shopfronts it appears under. |
+| **Scoring** | Cheap deterministic rules first, then a single AI call only for candidates that already earned it. |
+| **Drafting** | Writes a specific, evidence-backed email — or writes nothing, if there is nothing honest to say. |
+| **Review** | You approve, edit, or skip each one. Skipping always asks why. |
+| **Sending** | Sends through your own mailbox, with your real signature, under a hard daily cap. |
+| **Learning** | Your skip reasons become rules that outrank the model's own judgement. |
+| **Follow-through** | Tracks replies, bounces and silence, and returns bounced businesses to the pool when a better address appears. |
+
+### Discovery: no manual seeding
+
+Four channels, all automated:
+
+- **OpenStreetMap** — businesses by category and metro area, including ones
+  with no website at all, which are often the strongest leads.
+- **Certificate Transparency logs** — every new HTTPS domain is published;
+  filtered to plausible independent brands.
+- **Link graph** — independent brands link to independent brands. Stockist
+  pages, "brands we love", collaborations and press pages propagate taste.
+- **Keyword harvesting** — mines Wikipedia and its own corpus for new search
+  terms, then validates which ones actually produce leads.
+
+## How it works
+
+Four cron triggers. That is the whole schedule.
+
+```
+05:00 UTC  crawl    discover, fetch, extract, score, evaluate — budget-capped
+06:00 UTC  crawl
+07:00 UTC  crawl
+11:00 UTC  queue    rank everything eligible, take the best few, draft emails
+```
+
+The pipeline is staged so expensive work only reaches candidates that have
+already earned it:
+
+```
+OSM sweep + CT logs + link graph + stale pool
+      ↓
+dedup             D1 lookup on every known identifier      free
+      ↓
+fetch + extract   robots-respecting, content-hash cached   cheap
+      ↓
+hard filters      parked domains, corporates, empty sites  free
+      ↓
+rule-based score  7 dimensions from real page signals      free
+      ↓
+      ├── below MIN_PRESCORE_FOR_AI → stops here, no AI spend
+      ↓
+AI evaluation     one call, cached by page hash            the only spend
+      ↓
+final score → rank → daily cap → drafts → your review queue
+```
+
+Nothing is re-fetched or re-evaluated while its content hash is unchanged, so
+the second run over the same corpus is nearly free.
+
+## Quick start
+
+**Prerequisites:** a Cloudflare account, Node 18+, and a domain on Cloudflare if
+you want the dashboard protected properly (strongly recommended).
 
 ```bash
+git clone <your-fork-url> lead-finder
+cd lead-finder
 npm install
 
 # 1. Create the database, then paste the printed id into wrangler.toml
-npm run db:create
+npx wrangler d1 create lead-finder
 
-# 2. Create the tables
+# 2. Create every table. schema.sql is complete on its own —
+#    the files in migrations/ are only for upgrading an existing install.
 npm run db:init
 
-# 3. Set the dashboard password (any long random string)
-npx wrangler secret put DASHBOARD_KEY
+# 3. Secrets. None of these belong in a file you commit.
+npx wrangler secret put DASHBOARD_KEY          # any long random string
+npx wrangler secret put SESSION_SECRET         # any long random string
+npx wrangler secret put ALLOWED_EMAILS         # who may sign in, comma-separated
+npx wrangler secret put SENDER_NAME
+npx wrangler secret put SENDER_EMAIL
+npx wrangler secret put SENDER_POSTAL_ADDRESS  # a real address — legally required
+npx wrangler secret put CF_ACCOUNT_ID          # for browser rendering
 
-# 4. Deploy
+# 4. Edit wrangler.toml: set your route pattern and your USER_AGENT.
+
+# 5. Deploy
 npm run deploy
 ```
 
-Then open `https://lead-finder.<your-subdomain>.workers.dev/?key=YOUR_KEY`.
-
-**Before sending anything**, fill in the real values in `wrangler.toml`:
-`SENDER_NAME`, `SENDER_EMAIL`, `SENDER_POSTAL_ADDRESS`, and `USER_AGENT`.
-The postal address is a legal requirement — see CAN-SPAM below.
+**Then put Cloudflare Access in front of the route.** The shipped config sets
+`REQUIRE_ACCESS = "true"`, which makes the Worker refuse any request that did
+not come through Access. See [Security model](#security-model) for why this
+matters more than it looks.
 
 ### Local development
 
 ```bash
-echo "DASHBOARD_KEY=$(openssl rand -base64 24 | tr -d /+= )" > .dev.vars
+cat > .dev.vars <<'EOF'
+DASHBOARD_KEY=any-long-random-string
+REQUIRE_ACCESS=false
+ALLOWED_EMAILS=you@example.com
+EOF
+
 npm run db:init:local
-npm run dev
-npm test
+npm run dev      # http://localhost:8787
+npm test         # 116 tests, no network, no database needed
 ```
 
----
+`.dev.vars` is gitignored and overrides `wrangler.toml` locally, which is how
+local development keeps working while production requires Access.
 
-## How it runs
+### Sending email
 
-Two cron triggers. That is the whole schedule.
+Sending is optional — without it the dashboard is a copy-and-paste queue. To
+send through Zoho Mail:
 
-```
-06:00 UTC  crawl   discover, fetch, extract, score, evaluate — budget-capped
-11:00 UTC  queue   rank everything qualified, take the top 30 max, draft
-```
+1. Create a Zoho API client, set `ZOHO_CLIENT_ID` and `ZOHO_REGION` in
+   `wrangler.toml`, and `npx wrangler secret put ZOHO_CLIENT_SECRET`.
+2. Open `/api/zoho/connect` in the dashboard and authorise.
 
-The pipeline is staged so that expensive work only happens to candidates that
-already earned it:
+Your Zoho signature is fetched from the account and attached at send time.
+Messages go as HTML by default so the signature renders as designed; set
+`MAIL_FORMAT=plaintext` to send flattened text instead.
 
-```
-OSM sweep + CT sweep + link graph + stale pool
-      ↓
-dedup            D1 lookup                       free
-      ↓
-fetch + extract  robots-respecting, hash-cached  cheap
-      ↓
-hard filters     parked, corporate, empty        free
-      ↓
-rule-based score 7 dimensions from real signals  free
-      ↓
-      ├── below MIN_PRESCORE_FOR_AI → stops here, no AI spend
-      ↓
-AI evaluation    one call, cached by page hash   the only spend
-      ↓
-final score → rank → top 30 max → drafts
-```
+## Configuration
 
-Roughly 90% of what matters is extracted mechanically — platform, prices,
-product counts, press, wholesale, paid apps, mobile viewport, image weight,
-copyright year, emails, socials. The model is only asked the questions rules
-genuinely cannot answer: does this brand have real aesthetic personality, and
-would you actually want to make something for them.
+Everything below is set in `wrangler.toml` and needs no code change.
 
----
+| Variable | Default | What it controls |
+|---|---|---|
+| `DAILY_QUEUE_MAX` | `30` | Most leads that can reach your queue in a day |
+| `DAILY_SEND_CAP` | `30` | Hard ceiling on sends per day; no bug can exceed it |
+| `MIN_SCORE_TO_QUEUE` | `68` | The recommended line — below it a lead is shown but flagged |
+| `ABSOLUTE_FLOOR` | `35` | Below this a lead is never surfaced |
+| `MIN_PRESCORE_FOR_AI` | `45` | The gate before any AI spend |
+| `SKIP_COOLDOWN_DAYS` | `45` | How long a skipped lead stays out of the queue |
+| `RE_EVAL_AFTER_DAYS` | `45` | When an unchanged lead is worth re-scoring |
+| `GHOST_AFTER_DAYS` | `30` | Silence after which a lead is marked ghosted |
+| `DAILY_FETCH_BUDGET` | `900` | Page fetches per day |
+| `DAILY_AI_BUDGET` | `75` | AI evaluations per day |
+| `DAILY_BROWSER_RENDERS` | `30` | Headless renders for JavaScript-only sites |
+| `MAX_RUN_SECONDS` | `120` | Wall-clock ceiling per crawl run |
+| `USER_AGENT` | — | How the crawler identifies itself. **Use a real contact URL.** |
+| `REQUIRE_ACCESS` | `true` | Refuse anything that did not arrive through Cloudflare Access |
+| `MAIL_FORMAT` | `html` | `html` renders your signature; `plaintext` flattens it |
 
-## The parts that matter
+## Making it yours: the part that is not configuration
 
-### Entity deduplication
-
-The non-negotiable one. Every identifier ever seen becomes a key row pointing
-at an entity. A new candidate is resolved by looking up all its keys at once.
-
-Keys come in two tiers, and the distinction is load-bearing:
-
-- **Strong** (exact domain, Instagram, TikTok, Etsy, email) — an exact match is
-  proof, and merges unconditionally.
-- **Weak** (slug similarity, name) — a hint, not proof. Accepted only when
-  nothing contradicts it. Two entities with *different* known domains are
-  never merged on a name resemblance.
-
-Slugs are emitted as variants rather than aggressively stripped, so
-`cute-brand.com` and `@cutebrandco` meet on `cutebrand`, while `moonstudio.com`
-and `moonbakery.com` never collide.
-
-Verified: seeding one business through four separate doors produces **one**
-entity; three different businesses produce three.
-
-### 30 is a ceiling, never a target
-
-There is no code path in [`src/queue.js`](src/queue.js) that lowers the
-threshold to fill space, and there should never be one. If eleven businesses
-clear the bar, the queue has eleven rows. If none do, the dashboard says so
-plainly rather than padding.
-
-### The two opportunity engines
-
-Website quality and system opportunity are scored **separately**, and `need`
-takes the better of the two. A beautiful site with orders taken by DM still
-scores as a strong lead. A prospect is only rejected when both are absent.
-
-### Evidence-based personalization
-
-Enforced mechanically, not just asked for in the prompt:
-
-- Claims about speed or mobile are stripped unless we actually measured a
-  supporting signal.
-- A compliment whose stated evidence does not overlap the real page text is
-  discarded.
-- **If there is no evidence-backed thing to admire, no draft is produced.**
-  The lead waits for better information. An invented compliment is worse than
-  silence.
-
-### Drafts cost zero AI
-
-The specifics that make an email personal are extracted during evaluation and
-already evidence-checked. Composing from them is deterministic, so 30 drafts
-add nothing to your AI spend, and the voice stays consistent. Seven niche
-personas, each with its own register and CTA; the CTA switches when the
-opportunity is a system rather than a website.
-
-### Cost control
-
-Hard daily caps on fetches and AI calls, enforced by a circuit breaker before
-every expensive operation. The database doubles as a compute cache: unchanged
-pages are never re-analysed, and AI results are keyed to the page's content
-hash. The dashboard shows both budgets as live meters.
-
-Defaults are deliberately low — 300 fetches and 40 AI calls a day. Raise them
-only after watching real usage.
-
----
-
-## Using this for your own business
-
-The machinery is not specific to one person: discovery, entity dedup, scoring,
-drafting, the review dashboard, sending, bounce handling and the feedback loop
-all work for any service business that sells to small, findable companies. What
-IS specific is the taste — which businesses count as good, what the emails say,
-and which niches are worth crawling. That lives in a handful of places and has
-to be replaced, not merely configured.
-
-**Set in `wrangler.toml` — no code change.**
-
-| Variable | What it is |
-|---|---|
-| `SENDER_NAME` | The name in the email body and the sign-off |
-| `SENDER_EMAIL` | The address you send from |
-| `SENDER_POSTAL_ADDRESS` | A real postal address — legally required, see CAN-SPAM below |
-| `ALLOWED_EMAILS` | Who may sign in to the dashboard |
-| `USER_AGENT` | How the crawler identifies itself; use a real contact URL |
-| `MIN_SCORE_TO_QUEUE`, `ABSOLUTE_FLOOR` | Where your bar sits |
-| `DAILY_SEND_CAP`, `DAILY_QUEUE_MAX` | Volume ceilings |
-| `GHOST_AFTER_DAYS` | Silence after which a lead is marked ghosted |
-
-**Rewrite in code — this is the part that is someone's judgement, not config.**
+The machinery is business-agnostic. The **taste** is not, and it lives in seven
+places that have to be rewritten rather than set. This is the real work of
+adopting this project, and it is a few hours, not a few minutes.
 
 | File | What to replace |
 |---|---|
-| `src/config.js` → `NICHES` | The taxonomy. Seven creative categories; yours will differ |
-| `src/outreach.js` → `PERSONAS` | The actual sales copy, per niche: the opener, what you do, what you offer |
-| `src/outreach.js` → `PLAIN_ENGLISH`, `BENEFIT` | How a technical finding is said to a non-technical reader, and the upside it implies |
-| `src/ai.js` → `SYSTEM` | The brief the model scores against: who you want, who you do not, what vetoes a lead outright |
+| `src/config.js` → `NICHES` | The taxonomy of business types you sell to |
+| `src/outreach.js` → `PERSONAS` | The actual sales copy per niche: opener, what you do, what you offer |
+| `src/outreach.js` → `PLAIN_ENGLISH` | How a technical finding is said to a non-technical reader |
+| `src/outreach.js` → `BENEFIT` | The same finding said as the upside it implies |
+| `src/ai.js` → `SYSTEM` | The brief the model scores against: who you want, who you do not, what disqualifies a lead outright |
 | `src/score.js` | Deterministic weights and hard vetoes |
 | `src/keywords.js` | The bootstrap keyword list discovery starts from |
-| `src/osm.js` → metro list | Where you look, if you sell locally |
+| `src/osm.js` | The metro list, if you sell locally |
 
-Nothing else needs touching. The rest — the crawl budget, the dedup index, the
-queue, the dashboard, the metrics, the send path — is business-agnostic.
+Everything else — the crawl budget, the dedup index, the queue, the dashboard,
+the metrics, the send path, bounce handling — works unchanged.
 
-**Two things worth knowing before you deploy it.**
+## The review dashboard
 
-The scoring is only as good as the feedback you give it. Every skip asks for a
-reason, and those reasons are what `deriveLessons` turns into rules that outrank
-the model's own judgement. A fresh install has no lessons and will surface
-things you do not want for the first week or two. That is expected; skip them
-with a real reason and it converges.
+Five pages, server-rendered, no build step, roughly 7 KB gzipped with zero
+external requests.
 
-Auth deserves a careful read. `accessUser()` in `src/index.js` trusts the
-`cf-access-authenticated-user-email` header, which is safe **only** because
-`workers_dev = false` and the single route sits behind Cloudflare Access, so no
-request can reach the Worker without Access having verified it first. If you
-deploy without Access in front, or add a second route, that assumption breaks
-and the header can be forged. Set `REQUIRE_ACCESS = "true"` to make the Worker
-refuse anything that did not come through Access.
+- **Today** — the day's queue. Each card shows the business, why it was
+  surfaced, and the full draft. Send, edit, or skip with a reason.
+- **Sent** — every email sent, searchable and filterable by date. Mark whether
+  they replied, and record a bounce.
+- **Skipped** — what you passed on and the reason you gave. Any of them can be
+  edited and put back in the queue.
+- **Bounced** — dead addresses. Enter a corrected one and requeue.
+- **Metrics** — see below.
 
-## CAN-SPAM
+### Bounces put the business back in the pool
 
-You are sending commercial email to US recipients. This is not optional:
+A bounce says the address was wrong, not that the business was. Marking one
+clears the stored address, records the dead one so it is never adopted again,
+and returns the business to the pool. It leaves your roster immediately and
+comes back on its own the next time a crawl finds a *different* address.
 
-- Every draft carries a physical postal address and an opt-out line. Set
-  `SENDER_POSTAL_ADDRESS` to a real address or the footer will say so loudly.
-- `POST /api/suppress` with `{"key": "someone@example.com"}` records a
-  permanent opt-out. Nothing removes suppressions automatically.
-- Wire that endpoint to whatever receives your replies so unsubscribes are
-  honored without you remembering to.
+### Skipping teaches it
 
-**Sending is deliberately not automated.** Cloudflare Email Routing receives
-and forwards; it does not send. Any From address you use must have SPF and
-DKIM configured for the actual sending path, or your mail fails alignment and
-lands in spam. The dashboard gives you copy-ready drafts and a "mark sent"
-button; you send them from a real mailbox you control. That is the honest
-$0 answer.
+Every skip asks for a reason, and those reasons are periodically distilled into
+rules that outrank the model's own judgement on future leads. A fresh install
+has no rules and will surface things you do not want for the first week or two.
+That is expected. Skip them with real reasons and it converges.
 
----
+## Metrics
 
-## API
+Daily, monthly, yearly and all-time views of:
 
-All endpoints require `?key=` or `Authorization: Bearer`. Fails closed if
-`DASHBOARD_KEY` is unset.
+- **Reply rate**, and what came of every send
+- **Sending over time**, against bounces on one scale
+- **Where leads stop** — the full funnel from discovered to client
+- **Whether the score predicts a reply** — if the bars do not descend, the
+  scoring is not earning its keep
+- **Reply rate by niche** — where your answers actually come from
+- **What the crawl spent** — AI calls, fetches, source queries, renders
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/` | Dashboard |
-| GET | `/health` | Unauthenticated liveness check |
-| GET | `/api/queue?day=` | Today's ranked queue |
-| GET | `/api/entity?id=` | One entity, its identity keys and snapshots |
-| GET | `/api/stats` | Counts, budgets, frontier |
-| POST | `/api/seed` | `{"seeds": ["brand.com", "@handle", ...]}` |
-| POST | `/api/run/crawl` | Trigger a crawl now |
-| POST | `/api/run/queue` | Rebuild the queue (`?dry=1` to preview) |
-| POST | `/api/outreach/:id/sent` | Mark sent — makes the lead permanently non-new |
-| POST | `/api/outreach/:id/skip` | Skip; lead returns to the pool |
-| POST | `/api/suppress` | Permanent opt-out |
+Charts are inline SVG with no charting library, and every figure has a table
+view so the numbers are reachable without seeing colour.
 
----
+## What it costs to run
 
-## Tuning
+On Cloudflare's free tier this is close to free for a single user, and the
+budget ceilings exist to keep it that way. The only meaningful spend is AI
+evaluation, which is gated behind a deterministic pre-score, cached by page
+content hash, and capped per day. A crawl over an unchanged corpus costs
+essentially nothing because nothing is re-fetched or re-evaluated.
 
-In `wrangler.toml`:
+Actual usage is visible on the Metrics page, broken down by resource.
 
-| Var | Default | What it does |
-|---|---|---|
-| `MIN_SCORE_TO_QUEUE` | 68 | The quality bar. Raise it if the queue feels thin on quality, not if it feels short. |
-| `MIN_PRESCORE_FOR_AI` | 45 | How selective the AI gate is. The main cost lever. |
-| `DAILY_FETCH_BUDGET` | 300 | Pages per day. |
-| `DAILY_AI_BUDGET` | 40 | Model calls per day. |
-| `DAILY_QUEUE_MAX` | 30 | The ceiling. |
-| `RE_EVAL_AFTER_DAYS` | 45 | How long before a known business is looked at again. |
-| `SOURCE_METROS_PER_RUN` | 2 | OSM metros swept per crawl. |
-| `SOURCE_KEYWORDS_PER_RUN` | 3 | CT keywords swept per crawl. |
-| `FRONTIER_LOW_WATER` | 150 | Sources only run when pending work drops below this. |
+## Legal: CAN-SPAM and crawling
 
-Scoring weights live in [`src/config.js`](src/config.js) — `fit` and
-`creative` and `money` are weighted equally at 20 each, deliberately. A
-terrible website belonging to someone who cannot afford the work is still a
-bad lead, and that is the failure mode most lead scorers fall into.
+**This sends commercial email to people who did not ask for it.** That is legal
+in the US under CAN-SPAM if you follow the rules, and illegal if you do not. In
+the EU and UK, GDPR and PECR are stricter — take advice before sending there.
 
----
+The system enforces two requirements and cannot be talked out of them:
 
-## What is verified, and what is not
+- **A real physical postal address** in every message. `SENDER_POSTAL_ADDRESS`
+  is not decorative. Editing it out of a draft puts it back.
+- **A working opt-out.** Every message carries one, and `/api/suppress` records
+  the request permanently.
 
-**Verified locally:** 45 unit tests pass; the Worker boots; auth fails closed;
-the schema applies; dedup produces one entity from four doors and three from
-three; a full crawl runs end to end from an
-**empty database with zero human input** — 283 real businesses discovered from
-two metros, chains filtered, link-graph expanded, budgets accounted; the
-dashboard renders; `wrangler deploy --dry-run` bundles cleanly.
+Suppressions are never removed automatically. Blocked addresses and domains are
+checked before every queue build and every draft.
 
-**Known calibration work:** the CT keyword list is partly unvalidated — several
-compound terms ("wheelthrown", "cutecore", "handpoured") return zero
-certificates and should be pruned; simple nouns ("apothecary", "mercantile",
-"letterpress") work. Run a sweep and check `source_cursor.total_found` to see
-which earn their place.
+Crawling respects `robots.txt`, caches by content hash to avoid re-fetching, and
+identifies itself via `USER_AGENT` — **set that to a real URL and address so
+site owners can contact you.**
 
-**Not yet verified, because it needs a real deployment:**
+## Security model
 
-- **Workers AI.** The model id in `src/config.js` and the `NEURONS_PER_EVAL`
-  estimate are marked in-code as needing verification. Check model
-  availability and your actual included Neuron allocation in your own
-  dashboard before trusting either. The pipeline degrades gracefully if the
-  model call fails — it falls back to rule-based scoring only.
-- **Real-world scoring calibration.** The thresholds are reasoned defaults, not
-  empirical ones. Seed twenty brands you genuinely love, run a crawl, and see
-  where they land. If brands you love score below 68, the weights are wrong,
-  not the brands.
-- **Cloudflare consumption at steady state.** Estimate it from the dashboard's
-  budget meters after a week of real running rather than from a projection.
+Three ways in, in order of preference:
+
+1. **Cloudflare Access** — the intended production path. Access terminates the
+   login at the edge and forwards a signed assertion.
+2. **A signed session cookie** — HMAC-signed, 12 hours, with the allowlist
+   re-checked on every request so revocation is immediate.
+3. **A shared key** — `DASHBOARD_KEY`, compared in constant time. A key in the
+   query string is swapped for a cookie and removed from the address bar.
+
+**One assumption worth understanding before you deploy.** The Worker reads the
+identity Cloudflare Access forwards without verifying the JWT signature itself.
+That is safe *only* because `workers_dev = false` and the single route sits
+behind an Access policy, so no request can reach the Worker without Access
+having verified it first. Deploy without Access in front, or add a second
+route, and that assumption breaks. `REQUIRE_ACCESS = "true"` is the backstop:
+it makes the Worker refuse anything that did not arrive through Access.
+
+The dashboard renders text scraped from strangers' websites, so it ships under
+a strict Content Security Policy — `default-src 'none'`, no CDN, no web fonts,
+scripts allowed only by per-request nonce. Everything is escaped on output.
+
+Nothing that is a credential belongs in `wrangler.toml`. Use
+`wrangler secret put`.
+
+## FAQ
+
+**Does this need an API key for an LLM?**
+No third-party key. Evaluation runs on Cloudflare Workers AI using your
+Cloudflare account. Drafting uses no LLM at all — emails are composed from
+evidence already extracted during evaluation, which is why 30 drafts cost
+nothing.
+
+**Will it email people automatically?**
+No. Nothing is sent without a human pressing a button. The cron jobs discover,
+score and draft; sending is always a deliberate act.
+
+**How many leads will it find?**
+That depends entirely on your niche and how tight your scoring is. Discovery is
+continuous, so the corpus grows daily; the queue is capped so the review stays
+a few minutes' work rather than an afternoon.
+
+**Can I use a mail provider other than Zoho?**
+Yes, with a small change. Sending is isolated in `src/zoho.js` behind a
+`sendMail` function. Anything with an HTTP send API — Postmark, Resend, SES —
+is a like-for-like replacement.
+
+**Does it work without a custom domain?**
+It runs, but you lose Cloudflare Access, which is the primary authentication.
+You would be relying on the shared key alone. Not recommended.
+
+**Is the data mine?**
+Everything lives in your own Cloudflare D1 database. There is no hosted service
+and no third party in the loop.
+
+**How do I know the scoring is any good?**
+The Metrics page plots reply rate by score band. If higher-scoring leads do not
+reply more often, the scoring is not working, and it says so plainly.
+
+**What happens to a lead that never replies?**
+After `GHOST_AFTER_DAYS` (30 by default) it is marked ghosted automatically. A
+status you set by hand is never overwritten.
+
+## Limitations
+
+Stated plainly, because finding out later is worse:
+
+- **It only sees what is on the public web.** No intent data, no firmographics,
+  no contact enrichment.
+- **Email discovery is imperfect.** Some businesses publish no address, and
+  those leads simply wait.
+- **The first fortnight is noisy.** Scoring needs your skip reasons to converge.
+- **Reply tracking is manual.** Nothing reads your inbox; you mark replies from
+  the Sent page. Ghosting is the only automatic status.
+- **US-shaped by default.** The metro list, the CAN-SPAM footer and the niche
+  taxonomy assume a US market. All three are replaceable.
+- **One reviewer.** There is no multi-user model, no roles, no team inbox.
+
+## Development
+
+```bash
+npm test          # 116 tests: pure functions and SQL shape, no network
+npm run dev       # local Worker against a local D1
+npm run deploy    # deploy to Cloudflare
+npm run tail      # live logs
+```
+
+Upgrading an existing install applies the files in `migrations/` in order.
+A fresh install needs only `schema.sql`, which is complete on its own.
+
+## Licence
+
+No licence is granted by default. Add one before publishing a fork.
