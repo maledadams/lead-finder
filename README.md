@@ -245,6 +245,59 @@ only after watching real usage.
 
 ---
 
+## Using this for your own business
+
+The machinery is not specific to one person: discovery, entity dedup, scoring,
+drafting, the review dashboard, sending, bounce handling and the feedback loop
+all work for any service business that sells to small, findable companies. What
+IS specific is the taste — which businesses count as good, what the emails say,
+and which niches are worth crawling. That lives in a handful of places and has
+to be replaced, not merely configured.
+
+**Set in `wrangler.toml` — no code change.**
+
+| Variable | What it is |
+|---|---|
+| `SENDER_NAME` | The name in the email body and the sign-off |
+| `SENDER_EMAIL` | The address you send from |
+| `SENDER_POSTAL_ADDRESS` | A real postal address — legally required, see CAN-SPAM below |
+| `ALLOWED_EMAILS` | Who may sign in to the dashboard |
+| `USER_AGENT` | How the crawler identifies itself; use a real contact URL |
+| `MIN_SCORE_TO_QUEUE`, `ABSOLUTE_FLOOR` | Where your bar sits |
+| `DAILY_SEND_CAP`, `DAILY_QUEUE_MAX` | Volume ceilings |
+| `GHOST_AFTER_DAYS` | Silence after which a lead is marked ghosted |
+
+**Rewrite in code — this is the part that is someone's judgement, not config.**
+
+| File | What to replace |
+|---|---|
+| `src/config.js` → `NICHES` | The taxonomy. Seven creative categories; yours will differ |
+| `src/outreach.js` → `PERSONAS` | The actual sales copy, per niche: the opener, what you do, what you offer |
+| `src/outreach.js` → `PLAIN_ENGLISH`, `BENEFIT` | How a technical finding is said to a non-technical reader, and the upside it implies |
+| `src/ai.js` → `SYSTEM` | The brief the model scores against: who you want, who you do not, what vetoes a lead outright |
+| `src/score.js` | Deterministic weights and hard vetoes |
+| `src/keywords.js` | The bootstrap keyword list discovery starts from |
+| `src/osm.js` → metro list | Where you look, if you sell locally |
+
+Nothing else needs touching. The rest — the crawl budget, the dedup index, the
+queue, the dashboard, the metrics, the send path — is business-agnostic.
+
+**Two things worth knowing before you deploy it.**
+
+The scoring is only as good as the feedback you give it. Every skip asks for a
+reason, and those reasons are what `deriveLessons` turns into rules that outrank
+the model's own judgement. A fresh install has no lessons and will surface
+things you do not want for the first week or two. That is expected; skip them
+with a real reason and it converges.
+
+Auth deserves a careful read. `accessUser()` in `src/index.js` trusts the
+`cf-access-authenticated-user-email` header, which is safe **only** because
+`workers_dev = false` and the single route sits behind Cloudflare Access, so no
+request can reach the Worker without Access having verified it first. If you
+deploy without Access in front, or add a second route, that assumption breaks
+and the header can be forged. Set `REQUIRE_ACCESS = "true"` to make the Worker
+refuse anything that did not come through Access.
+
 ## CAN-SPAM
 
 You are sending commercial email to US recipients. This is not optional:

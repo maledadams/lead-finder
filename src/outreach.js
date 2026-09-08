@@ -139,7 +139,7 @@ export function composeDraft(entity, env) {
     '',
     `${fixCaps(persona.open(lowerFirst(p.liked)).replace('{BRAND}', name))}.`,
     '',
-    `I'm Lucía Adams. ${persona.context}`,
+    `I'm ${senderName(env)}. ${persona.context}`,
     '',
     benefit
       ? `Looking at your site, ${name} could benefit from ${lowerFirst(benefit)}.${why ? ` ${sentence(why)}` : ''}`
@@ -182,7 +182,7 @@ function composeObservationDraft(entity, env, persona, opportunity) {
     '',
     `I came across ${name} this week and spent some time on your site.`,
     '',
-    `I'm Lucía Adams. ${persona.context}`,
+    `I'm ${senderName(env)}. ${persona.context}`,
     '',
     benefit
       ? `${name} could benefit from ${lowerFirst(benefit)}.${why ? ` ${sentence(why)}` : ''}`
@@ -234,7 +234,7 @@ function composeNoWebsiteDraft(entity, env, persona) {
     '',
     point,
     '',
-    `I'm Lucía Adams. ${persona.context}`,
+    `I'm ${senderName(env)}. ${persona.context}`,
     '',
     'If it would be useful, I can put together a rough idea of what a site could look like for you — free, and with no expectation that you work with me afterwards.',
     '',
@@ -268,14 +268,18 @@ function composeNoWebsiteDraft(entity, env, persona) {
  * The CAN-SPAM footer is separate and still required — a postal address and a
  * working opt-out are legal obligations, not a sign-off.
  */
+/** Whoever is actually sending. SENDER_NAME is set in wrangler.toml. */
+export function senderName(env) {
+  return stripControl(env?.SENDER_NAME) || 'Lucía Adams';
+}
+
 function signature(env) {
   // The Zoho firma is NOT added here. It is fetched from Zoho and appended at
   // send time (see sendMail), because that is the only way the real one — the
   // account's own default — reaches the recipient: Zoho's API does not attach
   // the webmail signature to messages posted through it, which is why sent
   // mail was arriving without it.
-  const name = env?.SENDER_NAME || 'Lucía Adams';
-  return `\nBest,\n${name}`;
+  return `\nBest,\n${senderName(env)}`;
 }
 
 const sentence = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) + '.' : '');
