@@ -8,6 +8,7 @@ import { num, QUEUEABLE_STATES } from './config.js';
 import { newId, nowIso } from './entity.js';
 import { composeDraft } from './outreach.js';
 import { deriveLessons } from './learning.js';
+import { canReceiveMail } from './mx.js';
 
 export function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -24,6 +25,7 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
     day, max, min_score: minScore,
     considered: 0, suppressed: 0, already_contacted: 0,
     no_contact_method: 0, no_honest_draft: 0, queued: 0, cooldown_days: 0,
+    undeliverable: 0,
   };
 
   // Age out anyone who never answered, before today's list is built, so the
@@ -110,6 +112,16 @@ export async function buildQueue(env, db, { dryRun = false } = {}) {
       // No evidence-backed compliment, or no concrete opportunity. We do not
       // invent one. This lead simply waits for better information.
       stats.no_honest_draft++;
+      continue;
+    }
+
+    // Ask DNS whether the domain can receive mail at all, before this lead is
+    // ever put in front of the reviewer. Cached, so it is one lookup per new
+    // domain rather than one per lead. Fails open: if DNS is unreachable the
+    // lead is kept, because a network blip must not empty the morning queue.
+    const mx = await canReceiveMail(db, e.contact_email);
+    if (!mx.deliverable) {
+      stats.undeliverable++;
       continue;
     }
 

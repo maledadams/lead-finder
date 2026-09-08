@@ -8,6 +8,7 @@ import {
 import { ingestSeeds } from './discover.js';
 import { renderDashboard } from './dashboard.js';
 import { PERIODS } from './metrics.js';
+import { canReceiveMail } from './mx.js';
 import {
   canSpamFooter, hasCanSpamFooter, stripControl, stripControlKeepLines,
 } from './outreach.js';
@@ -545,6 +546,11 @@ export default {
           .bind(email).first();
         if (blocked) return json({ error: `that address is suppressed (${blocked.reason})` }, 409);
 
+        const reachable = await canReceiveMail(db, email);
+        if (!reachable.deliverable) {
+          return json({ error: `that domain cannot receive mail (${reachable.detail})` }, 422);
+        }
+
         const res = await db.prepare(
           `UPDATE entities SET contact_email = ?, contact_source = 'manual', updated_at = ?
            WHERE id = ?`
@@ -611,6 +617,19 @@ export default {
         // Never send the same draft twice, whatever the caller does.
         if (row.status === 'SENT') return json({ error: 'already-sent' }, 409);
         if (!row.contact_email) return json({ error: 'no-recipient' }, 400);
+
+        // The last gate before a message leaves. Nothing reaches a recipient
+        // without DNS confirming the domain can receive mail — not a revived
+        // draft, not a hand-entered address, not a direct API call.
+        const reachable = await canReceiveMail(db, row.contact_email);
+        if (!reachable.deliverable) {
+          await db.prepare('UPDATE outreach SET send_error = ? WHERE id = ?')
+            .bind(`undeliverable: ${reachable.detail}`.slice(0, 300), outreachId).run();
+          return json({
+            error: `that domain cannot receive mail (${reachable.detail})`,
+            sent: false,
+          }, 422);
+        }
 
         // A cap that a bug cannot talk its way past.
         const cap = Number(env.DAILY_SEND_CAP || 30);

@@ -314,3 +314,19 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value      TEXT,
   updated_at TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- mx_cache — does this domain accept mail at all? (migration 006)
+--
+-- A DNS answer, not an SMTP probe: the recipient's server is never contacted
+-- and the business never learns anything happened. Checked before a lead
+-- reaches the review queue and again immediately before every send.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mx_cache (
+  domain      TEXT PRIMARY KEY,
+  deliverable INTEGER NOT NULL,      -- 1 | 0
+  detail      TEXT,                  -- mx:2 | nxdomain | implicit-mx:a | ...
+  checked_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mx_checked ON mx_cache(checked_at);
