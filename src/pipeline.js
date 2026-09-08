@@ -641,18 +641,54 @@ function cleanTitle(title) {
  * ranked last; better no email, and the lead waits, than a pitch to payroll.
  */
 const WRONG_DEPARTMENT =
-  /^(?:hr|jobs|careers|recruit\w*|hiring|billing|accounts?|accounting|invoices?|payroll|legal|compliance|privacy|dpo|security|abuse|webmaster|postmaster|noreply|no-reply|donotreply|unsubscribe|returns|shipping|warranty|wholesale-?apply)@/i;
+  /^(?:hr|jobs|careers|recruit\w*|hiring|billing|accounts?|accounting|invoices?|payroll|legal|compliance|privacy|dpo|security|abuse|webmaster|postmaster|noreply|no-?reply|donotreply|unsubscribe|returns|shipping|warranty|wholesale-?apply)@/i;
 
-const GENERIC_INBOX =
-  /^(?:info|hello|hi|hey|contact|support|enquir\w*|inquir\w*|admin|orders?|help|team|press|media|studio|shop|mail|office)@/i;
+// Addresses a machine sends FROM, or a shopping cart owns. Nobody reads these.
+//
+// checkout@ was being chosen over hello@ — not because it scored better, but
+// because the old rule treated anything it did not recognise as a person, and
+// it did not recognise "checkout". The list of things that are not people has
+// to be the explicit one.
+const AUTOMATED =
+  /^(?:checkout|cart|basket|order-?status|orderstatus|tracking|newsletter|subscribe|subscriptions?|notifications?|alerts?|mailer|mailer-?daemon|bounces?|automated|system|robot|bot|daemon|noreply\d*|updates?|digest|receipts?|confirm\w*)@/i;
 
+// General inboxes a human really does read, best first. Not disqualifying —
+// for a small studio hello@ is often the only address there is.
+const GENERAL_INBOX = [
+  /^hello@/i, /^hi@/i, /^hey@/i, /^contact@/i, /^info@/i,
+  /^enquir\w*@/i, /^inquir\w*@/i, /^studio@/i, /^team@/i, /^office@/i,
+  /^ask@/i, /^talk@/i, /^hq@/i, /^shop@/i, /^mail@/i, /^admin@/i,
+  /^support@/i, /^help@/i, /^press@/i, /^media@/i, /^orders?@/i, /^sales@/i,
+];
+
+/** Anything not on a known role list is treated as possibly a person. */
+const ROLEISH = new RegExp(
+  `${WRONG_DEPARTMENT.source.slice(0, -1)}|${AUTOMATED.source.slice(0, -1)}|`
+  + GENERAL_INBOX.map((r) => r.source.slice(0, -1)).join('|'),
+  'i'
+);
+
+/**
+ * Which address to actually write to.
+ *
+ * Ranked rather than filtered, because "not a role address" is not the same as
+ * "a person" — that assumption is what put shopping-cart addresses at the top.
+ */
 function pickEmail(emails) {
-  if (!emails?.length) return null;
-  const usable = emails.filter((e) => !WRONG_DEPARTMENT.test(e));
+  const usable = (emails || []).filter(
+    (e) => e && !WRONG_DEPARTMENT.test(e) && !AUTOMATED.test(e)
+  );
   if (!usable.length) return null;
 
-  // A named human first, then a general inbox.
-  return usable.find((e) => !GENERIC_INBOX.test(e)) || usable[0];
+  const rank = (e) => {
+    // A local part that matches no known role, carries no digits and is not a
+    // catch-all is most likely a human being.
+    if (!ROLEISH.test(e) && !/^\S*\d/.test(e) && !/^(?:all|everyone|everybody)@/i.test(e)) return 0;
+    const i = GENERAL_INBOX.findIndex((rx) => rx.test(e));
+    return i === -1 ? 1 + GENERAL_INBOX.length : 1 + i;
+  };
+
+  return [...usable].sort((a, b) => rank(a) - rank(b) || a.length - b.length)[0];
 }
 
 /** Links are huge and only needed during the run; don't store them. */

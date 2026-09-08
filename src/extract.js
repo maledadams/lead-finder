@@ -15,8 +15,30 @@ const strip = (s) =>
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ');
 
+/**
+ * Numeric HTML entities, decoded.
+ *
+ * Writing an address as &#105;&#110;&#102;&#111;&#64;... is one of the commonest
+ * ways a small site hides it from scrapers while still showing it to a reader.
+ * Named entities were already handled here; numeric ones were not, so those
+ * addresses arrived as literal &#105;&#110;... and were stored that way.
+ * Decoding them finds real contacts rather than inventing any.
+ */
+const decodeNumericEntities = (s) =>
+  String(s)
+    .replace(/&#(\d{1,7});/g, (m, d) => codePoint(Number(d), m))
+    .replace(/&#x([0-9a-f]{1,6});/gi, (m, h) => codePoint(parseInt(h, 16), m));
+
+function codePoint(n, original) {
+  // Leave anything that is not a plain printable character alone: a decoded
+  // control character in a mail header is exactly what stripControl exists to
+  // prevent, and there is no legitimate one inside an address.
+  if (!Number.isFinite(n) || n < 0x20 || n > 0x10ffff || (n >= 0x7f && n <= 0x9f)) return original;
+  try { return String.fromCodePoint(n); } catch { return original; }
+}
+
 const textOf = (html) =>
-  strip(html)
+  decodeNumericEntities(strip(html))
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -318,22 +340,73 @@ export function decodeCloudflareEmails(html) {
  */
 export function decodeObfuscated(text) {
   const out = [];
-  const rx = /\b([\w.+-]{2,40})\s*(?:\(|\[|\{)?\s*(?:at|@)\s*(?:\)|\]|\})?\s*([\w-]{2,40})\s*(?:\(|\[|\{)?\s*(?:dot|\.)\s*(?:\)|\]|\})?\s*([a-z]{2,12})\b/gi;
-  let m;
-  while ((m = rx.exec(String(text || ''))) !== null) {
-    const candidate = `${m[1]}@${m[2]}.${m[3]}`.toLowerCase();
-    if (/^[^\s@]+@[^\s@]+\.[a-z]{2,12}$/.test(candidate)) out.push(candidate);
-    if (out.length > 6) break;
+  // Every separator here must be REAL obfuscation. The previous pattern let
+  // each one match nothing at all, so "at" appearing inside an ordinary word
+  // was enough: "creativity.com" was read as cre + at + ivity + . + com and
+  // became cre@ivity.com. Worse, plain prose matched too — "our latest
+  // collection at studio.com" produced collection@studio.com, which looks
+  // real enough to send to, and then bounces.
+  //
+  // The rule that separates the two: a genuine obfuscation always SAYS so,
+  // either by bracketing the separator or by spelling out "dot". A bare "at"
+  // next to a bare "." is just a sentence, and is left alone.
+  const AT_BRACKETED = String.raw`\s*[([{]\s*(?:at|@)\s*[)\]}]\s*`;
+  const AT_SPACED = String.raw`\s+(?:at|@)\s+`;
+  const DOT_BRACKETED = String.raw`\s*[([{]\s*(?:dot|\.)\s*[)\]}]\s*`;
+  const DOT_SPELLED = String.raw`\s*\bdot\b\s*`;
+  const DOT_PLAIN = String.raw`\s*\.\s*`;
+
+  // Bracketed "at" is unambiguous, so any dot form is fine after it.
+  // A merely spaced "at" is ambiguous, so it demands an explicit dot.
+  const patterns = [
+    `([\\w.+-]{2,40})(?:${AT_BRACKETED})([\\w-]{2,40})(?:${DOT_BRACKETED}|${DOT_SPELLED}|${DOT_PLAIN})([a-z]{2,12})`,
+    `([\\w.+-]{2,40})(?:${AT_SPACED})([\\w-]{2,40})(?:${DOT_BRACKETED}|${DOT_SPELLED})([a-z]{2,12})`,
+  ];
+
+  for (const src of patterns) {
+    const rx = new RegExp(`\\b${src}\\b`, 'gi');
+    let m;
+    while ((m = rx.exec(String(text || ''))) !== null) {
+      const candidate = `${m[1]}@${m[2]}.${m[3]}`.toLowerCase();
+      if (/^[^\s@]+@[^\s@]+\.[a-z]{2,12}$/.test(candidate)) out.push(candidate);
+      if (out.length > 6) break;
+    }
   }
-  return out;
+  return [...new Set(out)];
 }
 
 // Addresses that are never a real human contact.
 const JUNK_EMAIL =
   /\.(png|jpe?g|gif|svg|webp|css|js)$|(?:sentry|wixpress|example|yourdomain|domain|email|placeholder|test)\.|^(?:no-?reply|donotreply|postmaster|abuse|webmaster|hostmaster)@|@(?:sentry|example|test|localhost)/i;
 
+/**
+ * Plausible top-level domains.
+ *
+ * Nothing used to check this, which is how ".duties", ".get" and ".book"
+ * became TLDs — the decoder was reading the first word of the NEXT sentence.
+ * Any two-letter ccTLD is allowed, plus the gTLDs a small business actually
+ * uses. A real address on an exotic TLD is refused here, and that is the right
+ * trade: a missed lead simply waits, while an invented address gets emailed,
+ * bounces, and costs sending reputation.
+ */
+const PLAUSIBLE_TLD = new RegExp(
+  '\\.(?:'
+  // ISO 3166-1 country codes. A bare two-letter rule would also accept
+  // ".if", which is not a country and was one of the invented addresses.
+  + 'ac|ad|ae|af|ag|ai|al|am|ao|aq|ar|as|at|au|aw|ax|az|ba|bb|bd|be|bf|bg|bh|bi|bj|bm|bn|bo|br|bs|bt|bw|by|bz|ca|cc|cd|cf|cg|ch|ci|ck|cl|cm|cn|co|cr|cu|cv|cw|cx|cy|cz|de|dj|dk|dm|do|dz|ec|ee|eg|er|es|et|eu|fi|fj|fk|fm|fo|fr|ga|gd|ge|gf|gg|gh|gi|gl|gm|gn|gp|gq|gr|gs|gt|gu|gw|gy|hk|hm|hn|hr|ht|hu|id|ie|il|im|in|io|iq|ir|is|it|je|jm|jo|jp|ke|kg|kh|ki|km|kn|kp|kr|kw|ky|kz|la|lb|lc|li|lk|lr|ls|lt|lu|lv|ly|ma|mc|md|me|mg|mh|mk|ml|mm|mn|mo|mp|mq|mr|ms|mt|mu|mv|mw|mx|my|mz|na|nc|ne|nf|ng|ni|nl|no|np|nr|nu|nz|om|pa|pe|pf|pg|ph|pk|pl|pm|pn|pr|ps|pt|pw|py|qa|re|ro|rs|ru|rw|sa|sb|sc|sd|se|sg|sh|si|sk|sl|sm|sn|so|sr|ss|st|su|sv|sx|sy|sz|tc|td|tf|tg|th|tj|tk|tl|tm|tn|to|tr|tt|tv|tw|tz|ua|ug|uk|us|uy|uz|va|vc|ve|vg|vi|vn|vu|wf|ws|ye|yt|za|zm|zw'
+  + '|com|net|org|edu|gov|mil|int|info|biz|name|pro|coop|aero|museum'
+  + '|app|dev|art|design|studio|gallery|agency|shop|store|boutique|market'
+  + '|company|solutions|services|works|world|life|live|media|press|photo|photography'
+  + '|clothing|jewelry|coffee|kitchen|bar|cafe|wine|beer|farm|garden|house|home'
+  + '|land|space|site|online|website|digital|tech|systems|email|club|social|team'
+  + '|group|xyz'
+  + ')$',
+  'i'
+);
+
 export function isUsableEmail(e) {
   if (!e || e.length > 100) return false;
   if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(e)) return false;
+  if (!PLAUSIBLE_TLD.test(e)) return false;
   return !JUNK_EMAIL.test(e);
 }

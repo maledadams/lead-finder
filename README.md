@@ -1,14 +1,30 @@
-# Lead Finder — self-hosted lead generation and cold outreach on Cloudflare Workers
+<div align="center">
 
-**Lead Finder is an open-source prospecting system that finds small businesses
-that need your services, scores them against your own taste, drafts a personal
-email to each one, and puts them in front of you to approve — one at a time.**
-It runs entirely on Cloudflare's free-ish tier, on a schedule, with your
-computer switched off.
+# 🧭 Lead Finder
 
-It is not a scraper you run by hand, and not a mail-merge tool. It is a
-persistent pipeline that gets better at picking leads the more you tell it why
-you skipped one.
+**Self-hosted lead generation and cold outreach on Cloudflare Workers.**
+
+It finds small businesses that need your services, scores them against your own
+taste, drafts a personal email to each one, and puts them in front of you to
+approve — one at a time. It runs on a schedule, on Cloudflare's free-ish tier,
+with your computer switched off.
+
+Not a scraper you run by hand, and not a mail-merge tool. A persistent pipeline
+that gets better at picking leads the more you tell it why you skipped one.
+
+<br>
+
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+&nbsp;
+![Tests](https://img.shields.io/badge/tests-122%20passing-brightgreen.svg)
+&nbsp;
+![Runs on Cloudflare Workers](https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-F38020.svg?logo=cloudflare&logoColor=white)
+&nbsp;
+![No LLM API key](https://img.shields.io/badge/LLM%20API%20key-not%20required-success.svg)
+&nbsp;
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
+</div>
 
 ---
 
@@ -27,6 +43,7 @@ you skipped one.
 - [Security model](#security-model)
 - [FAQ](#faq)
 - [Limitations](#limitations)
+- [Contributing](#contributing)
 
 ---
 
@@ -158,7 +175,7 @@ EOF
 
 npm run db:init:local
 npm run dev      # http://localhost:8787
-npm test         # 116 tests, no network, no database needed
+npm test         # 122 tests, no network, no database needed
 ```
 
 `.dev.vars` is gitignored and overrides `wrangler.toml` locally, which is how
@@ -374,7 +391,7 @@ Stated plainly, because finding out later is worse:
 ## Development
 
 ```bash
-npm test          # 116 tests: pure functions and SQL shape, no network
+npm test          # 122 tests: pure functions and SQL shape, no network
 npm run dev       # local Worker against a local D1
 npm run deploy    # deploy to Cloudflare
 npm run tail      # live logs
@@ -382,6 +399,35 @@ npm run tail      # live logs
 
 Upgrading an existing install applies the files in `migrations/` in order.
 A fresh install needs only `schema.sql`, which is complete on its own.
+
+## Contributing
+
+Contributions to the **machinery** are welcome — the discovery sources, the
+dedup index, the scoring engine, the dashboard, bounce handling, mail-provider
+adapters, tests and docs. The **taste** (`NICHES`, `PERSONAS`, the AI brief in
+`src/ai.js`) is meant to be rewritten per operator, so please don't send a PR
+that swaps in your own niche.
+
+Good first contributions:
+
+- A new discovery source behind the same interface as `src/sources.js`
+- A mail-provider adapter alongside `src/zoho.js` (Postmark, Resend, SES)
+- A non-US metro list or CAN-SPAM-equivalent footer
+- Tightening a scoring dimension with a test that shows the improvement
+
+Before opening a PR:
+
+- `npm test` is green (`node --test`, no network, no database)
+- No new runtime dependencies — the Worker ships with none, and that is on
+  purpose. Raise an issue first if you think one is unavoidable.
+- Match the surrounding style: plain ES modules, no framework, no build step,
+  output always escaped, the Content-Security-Policy left strict.
+- One focused change per PR, with a short imperative commit subject.
+
+Found a security issue? Use GitHub's **private vulnerability reporting** on this
+repo rather than opening a public issue.
+
+Full detail is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licence
 
