@@ -1,9 +1,0 @@
-{
-  "detector": {
-    "ignoreRules": [
-      "em-dash-overuse"
-    ],
-    "ignoreFiles": [],
-    "ignoreValues": []
-  }
-}

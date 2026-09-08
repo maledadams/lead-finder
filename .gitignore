@@ -17,3 +17,6 @@ dist/
 
 # local editor/agent settings (can contain dev keys in permission entries)
 .claude/settings.local.json
+
+# local design-tool config
+.impeccable/
