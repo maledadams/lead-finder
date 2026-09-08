@@ -7,6 +7,7 @@ import {
 } from './queue.js';
 import { ingestSeeds } from './discover.js';
 import { renderDashboard } from './dashboard.js';
+import { PERIODS } from './metrics.js';
 import {
   canSpamFooter, hasCanSpamFooter, stripControl, stripControlKeepLines,
 } from './outreach.js';
@@ -61,6 +62,9 @@ function cspFor(nonce) {
   return [
     "default-src 'none'",
     "style-src 'unsafe-inline'",
+    // The tab icon is an inline SVG data URI. `data:` only — no host is
+    // allowed, so this cannot become a way to load a remote image.
+    "img-src data:",
     `script-src 'nonce-${nonce}'`,
     "connect-src 'self'",
     "form-action 'none'",
@@ -94,6 +98,7 @@ const PAGES = {
   '/sent': 'sent',
   '/skipped': 'skipped',
   '/bounced': 'bounced',
+  '/metrics': 'metrics',
 };
 
 /** A date filter is only ever YYYY-MM-DD. Anything else is not a date. */
@@ -313,6 +318,7 @@ export default {
           q: (url.searchParams.get('q') || '').trim().slice(0, 80),
           from: dateParam(url.searchParams.get('from')),
           to: dateParam(url.searchParams.get('to')),
+          period: PERIODS[url.searchParams.get('period')] ? url.searchParams.get('period') : 'month',
         });
         return new Response(html, {
           headers: {
