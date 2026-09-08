@@ -2,35 +2,11 @@ name = "lead-finder"
 main = "src/index.js"
 compatibility_date = "2025-09-01"
 compatibility_flags = ["nodejs_compat"]
-
-# workers.dev is off deliberately. It is a second hostname reaching the same
-# Worker without passing through Cloudflare Access, which would make the Access
-# policy on leads.maledadams.work decorative.
 workers_dev = false
 
-# ---------------------------------------------------------------------------
-# Cron schedule.
-#
-# Two triggers, deliberately few — every invocation costs requests and CPU.
-#
-#   05:00 UTC  crawl   three passes rather than one: a single invocation
-#   06:00 UTC  crawl   cannot work through a day's budget before it runs out
-#   07:00 UTC  crawl   of time, and shorter runs also fail more cheaply.
-#   11:00 UTC  queue   build the day's ranked outreach queue (<=30)
-#
-# The gap lets the crawl finish and settle before the queue reads scores.
-# Adjust to taste; more frequent runs cost more and buy nothing at this volume.
-# ---------------------------------------------------------------------------
 [triggers]
 crons = ["0 5 * * *", "0 6 * * *", "0 7 * * *", "0 11 * * *"]
 
-# ---------------------------------------------------------------------------
-# Custom domain for the dashboard.
-#
-# Internal tooling lives on the work domain; the client-facing identity is
-# lucia-adams.com. Cloudflare Access can only protect a hostname in a zone you
-# control, which is why this is not on workers.dev.
-# ---------------------------------------------------------------------------
 [[routes]]
 pattern = "leads.maledadams.work"
 custom_domain = true
@@ -38,20 +14,11 @@ custom_domain = true
 [[d1_databases]]
 binding = "DB"
 database_name = "lead-finder"
-# Replace with the id printed by `npm run db:create`.
-database_id = "e8410da3-3981-428c-ba18-d5995825811e"  # replace with your own: `wrangler d1 create`
+database_id = "e8410da3-3981-428c-ba18-d5995825811e"
 
 [ai]
 binding = "AI"
 
-# ---------------------------------------------------------------------------
-# Rate limiting.
-#
-# Two separate limiters on purpose. A wrong key is the signal that matters —
-# someone guessing gets throttled hard and independently of normal use, so a
-# brute-force attempt cannot hide inside ordinary dashboard traffic.
-# Counters are per-colo, not global; that is fine for abuse control.
-# ---------------------------------------------------------------------------
 [[ratelimits]]
 name = "API_LIMITER"
 namespace_id = "1001"
@@ -63,58 +30,33 @@ namespace_id = "1002"
 simple = { limit = 8, period = 60 }
 
 [vars]
-# Everything here is a safety limit. They are intentionally low.
-# Raise them only after you have watched real usage in the dashboard.
 DAILY_FETCH_BUDGET = "900"
 DAILY_AI_BUDGET = "75"
 DAILY_QUEUE_MAX = "30"
 CRAWL_FRONTIER_BATCH = "90"
-# A pass stops cleanly at this many seconds; the next cron pass continues.
 MAX_RUN_SECONDS = "120"
 NO_SITE_BATCH = "40"
-# Browser Rendering is metered. Only JS-rendered pages escalate to it.
 DAILY_BROWSER_RENDERS = "30"
 DAILY_SOURCE_QUERIES = "24"
 KEYWORDS_VALIDATED_PER_RUN = "8"
 SOURCE_KEYWORDS_PER_RUN = "5"
 SOURCE_METROS_PER_RUN = "4"
 FRONTIER_LOW_WATER = "150"
-MIN_SCORE_TO_QUEUE = "68"      # the recommended line, not a hard gate
-ABSOLUTE_FLOOR = "35"          # below this a lead is genuinely not worth a look
-SKIP_COOLDOWN_DAYS = "45"      # a skipped lead does not reappear before this          # below this a lead is genuinely not worth a look
+MIN_SCORE_TO_QUEUE = "68"
+ABSOLUTE_FLOOR = "35"
+SKIP_COOLDOWN_DAYS = "45"
 MIN_PRESCORE_FOR_AI = "45"
 RE_EVAL_AFTER_DAYS = "45"
-# Set to "true" once the Worker is behind Cloudflare Access on a custom
-# domain. It then refuses any request that did not come through Access,
-# which closes the workers.dev bypass.
 REQUIRE_ACCESS = "true"
-# ^ Refuse anything that did not arrive through Cloudflare Access. The OAuth
-#   callbacks are handled before this gate, because they come from Zoho's and
-#   Google's servers and can never carry an Access session.
-#
-# Set with `wrangler secret put`, never here, so this file is safe to publish:
-#   ALLOWED_EMAILS   who may sign in           (personal addresses)
-#   CF_ACCOUNT_ID    used for browser renders  (identifies the account)
-#   SENDER_NAME  SENDER_EMAIL  SENDER_POSTAL_ADDRESS
-#   DASHBOARD_KEY  SESSION_SECRET  ZOHO_CLIENT_SECRET  GOOGLE_CLIENT_SECRET
 
-# Zoho Mail sending. The client secret is a secret; the refresh token is
-# obtained once via /api/zoho/connect and stored in D1.
+# Secrets set with `wrangler secret put`:
+# ALLOWED_EMAILS, CF_ACCOUNT_ID, SENDER_NAME, SENDER_EMAIL,
+# SENDER_POSTAL_ADDRESS, DASHBOARD_KEY, SESSION_SECRET, ZOHO_CLIENT_SECRET
+
 ZOHO_CLIENT_ID = "1000.TZQ2SZONKI7N9111083IQA2ZS9WVEC"
-ZOHO_REGION = "com"          # com | eu | in | au | jp
-DAILY_SEND_CAP = "30"        # a hard ceiling no bug can exceed
+ZOHO_REGION = "com"
+DAILY_SEND_CAP = "30"
+USER_AGENT = "LeadFinderBot/0.1 (+https://example.com; hello@example.com)"
 
-# Google sign-in. Everyone here gets their own login and their decisions are
-# recorded under their own address. GOOGLE_CLIENT_SECRET and SESSION_SECRET
-# are secrets, not vars — set them with `wrangler secret put`.
-GOOGLE_CLIENT_ID = "REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID"
-USER_AGENT = "LeadFinderBot/0.1 (+https://example.com; hello@example.com)"  # change this
-
-# Sending identity, used in outreach drafts and the CAN-SPAM footer.
-# These are placeholders — fill them in before you send anything.
-
-# Set a long random string, then send it as `Authorization: Bearer <value>`
-# (or `?key=<value>`) to reach the dashboard and the seed endpoint.
-# Use a secret in production:  wrangler secret put DASHBOARD_KEY
 [observability]
 enabled = true
