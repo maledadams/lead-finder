@@ -444,8 +444,7 @@ function shell({ view, nonce, signedInAs, sending, counts, body }) {
 <html lang="en" data-theme="light"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="14" cy="14" r="8.5" fill="none" stroke="%23006FEE" stroke-width="3.2"/><path d="M20.4 20.4 27 27" stroke="%23006FEE" stroke-width="3.6" stroke-linecap="round"/></svg>">
-<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="14" cy="14" r="8.5" fill="none" stroke="%23006FEE" stroke-width="3.2"/><path d="M20.4 20.4 27 27" stroke="%23006FEE" stroke-width="3.6" stroke-linecap="round"/></svg>">
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAzMiAzMic+PGNpcmNsZSBjeD0nMTQnIGN5PScxNCcgcj0nOC41JyBmaWxsPSdub25lJyBzdHJva2U9JyMwMDZGRUUnIHN0cm9rZS13aWR0aD0nMy4yJy8+PHBhdGggZD0nTTIwLjQgMjAuNCAyNyAyNycgc3Ryb2tlPScjMDA2RkVFJyBzdHJva2Utd2lkdGg9JzMuNicgc3Ryb2tlLWxpbmVjYXA9J3JvdW5kJy8+PC9zdmc+">
 <title>${esc(TITLES[view] || 'Leads')} — leads</title>
 <script nonce="${esc(nonce)}">
 // Before first paint, so a dark-mode user never sees a white flash.

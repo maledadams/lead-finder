@@ -68,3 +68,39 @@ test('the dashboard has no inline event handlers for CSP to block', async () => 
     fs.promises.readFile(new URL('../src/dashboard.js', import.meta.url), 'utf8'));
   assert.ok(!/\son[a-z]+\s*=\s*["']/.test(src), 'inline handlers would be blocked by the nonce CSP');
 });
+
+/**
+ * A data: URI in an HTML attribute must not carry a raw quote.
+ *
+ * The favicon shipped once percent-encoded with `"` left in the safe set, so
+ * `href="data:image/svg+xml,<svg xmlns="` closed the attribute on its own
+ * second quote: the icon never loaded and the rest of the SVG leaked into the
+ * page as visible text. Base64 has no character that can break out, and this
+ * asserts it stays that way.
+ */
+test('the favicon data URI cannot break out of its attribute', async () => {
+  const { renderDashboard } = await import('../src/dashboard.js');
+  const db = {
+    prepare: () => {
+      const first = async () => ({ todo: 0, sent: 0, skipped: 0, bounced: 0, contacted: 0 });
+      const all = async () => ({ results: [] });
+      return { first, all, bind: () => ({ first, all }) };
+    },
+  };
+  const html = await renderDashboard(db, {}, {
+    view: 'today', nonce: 'n', signedInAs: null, sending: null,
+    day: '2026-09-08', page: 1, q: '', from: null, to: null,
+  });
+
+  const icons = html.match(/<link rel="icon" href="([^"]*)">/g) || [];
+  assert.equal(icons.length, 1, 'exactly one icon link');
+
+  const href = html.match(/<link rel="icon" href="([^"]*)">/)[1];
+  assert.match(href, /^data:image\/svg\+xml;base64,[A-Za-z0-9+/=]+$/, 'base64 only — no raw markup');
+  assert.match(Buffer.from(href.split(',')[1], 'base64').toString(), /^<svg[\s\S]*<\/svg>$/);
+
+  // Nothing may sit between the head tags except the title and the theme script.
+  const head = html.slice(0, html.indexOf('</head>'));
+  assert.ok(!/["']\s*>\s*["']/.test(head), 'no attribute-breakout debris in the head');
+  assert.ok(!head.includes('<svg'), 'the svg must stay inside the data URI, not in the markup');
+});
