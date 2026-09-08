@@ -12,16 +12,14 @@
 /**
  * Per-niche framing.
  *
- * `context` is how Lucia describes what she does to THIS kind of business —
- * the credibility line. `offer` is the concrete thing she will send, which is
- * what earns a reply: a request for "a quick chat" asks the recipient to
- * spend time, an offer to send something specific gives them a reason to.
+ * `context` is how the sender describes what they do to THIS kind of business —
+ * the credibility line, and the only per-niche text left in an email now that
+ * the drafts open on it directly.
  */
 const PERSONAS = {
   alt_fashion: {
     label: 'Alternative fashion',
     subject: (n) => `${n} — a few notes on your site`,
-    open: (liked) => `I came across ${'{BRAND}'} recently and spent a while on your site. ${liked} is genuinely great`,
     context: 'I design and build websites for independent fashion labels — the kind where the site needs to carry as much personality as the clothes do.',
     offer: 'a short written breakdown of what I would change on the shop pages, with a rough visual of how it could look',
     sign: 'Lucía Adams',
@@ -29,7 +27,6 @@ const PERSONAS = {
   craft_goods: {
     label: 'Handmade & craft',
     subject: (n) => `${n} — a few notes on your shop pages`,
-    open: (liked) => `I came across your work this week and spent some time with it. ${liked} is lovely`,
     context: 'I design and build websites for independent makers and studios, so the site does justice to work that is made by hand.',
     offer: 'a short written breakdown of what I would change, with a rough visual of how the shop could feel closer to the objects themselves',
     sign: 'Lucía Adams',
@@ -37,7 +34,6 @@ const PERSONAS = {
   beauty_wellness: {
     label: 'Beauty & skincare',
     subject: (n) => `${n} — notes on your product pages`,
-    open: (liked) => `I was looking through your range this week and ${liked} stayed with me`,
     context: 'I design and build websites for independent beauty and skincare brands, where most of the decision happens on the product page.',
     offer: 'a short written breakdown of what I would change on the product pages, and why',
     sign: 'Lucía Adams',
@@ -45,7 +41,6 @@ const PERSONAS = {
   food_bev: {
     label: 'Food & beverage',
     subject: (n) => `${n} — a thought on your ordering flow`,
-    open: (liked) => `I came across ${'{BRAND}'} recently and ${liked} sold me immediately`,
     context: 'I design and build websites and ordering systems for small food and drink brands.',
     offer: 'a short teardown of the ordering flow with the specific changes I would make',
     sign: 'Lucía Adams',
@@ -53,7 +48,6 @@ const PERSONAS = {
   artist_portfolio: {
     label: 'Artist portfolio',
     subject: () => `Your work and where it lives`,
-    open: (liked) => `I spent a while with your work today. ${liked} really stayed with me`,
     context: 'I design and build portfolio sites for artists and illustrators — properly built, not a template with your images dropped in.',
     offer: 'a rough layout for what a real portfolio site could look like for your work',
     sign: 'Lucía Adams',
@@ -61,7 +55,6 @@ const PERSONAS = {
   creative_studio: {
     label: 'Creative studio',
     subject: (n) => `${n} — a note on your own site`,
-    open: (liked) => `I have been looking through your work and ${liked} stands out`,
     context: 'I build websites and internal tools for creative studios — usually the work that gets postponed because client projects come first.',
     offer: 'a short written assessment of your site and the workflow around it, with what I would prioritise',
     sign: 'Lucía Adams',
@@ -69,7 +62,6 @@ const PERSONAS = {
   lifestyle_brand: {
     label: 'Creative lifestyle brand',
     subject: (n) => `${n} — a few notes on your site`,
-    open: (liked) => `I came across ${'{BRAND}'} recently and ${liked} is really nice`,
     context: 'I design and build websites for independent brands with a clear identity of their own.',
     offer: 'a short written breakdown of what I would change, with a rough visual of where it could go',
     sign: 'Lucía Adams',
@@ -89,8 +81,10 @@ function ctaFor(persona, entity, det) {
 /**
  * The body every draft now shares.
  *
- * Ordered the way a person would actually say it, and with the throat-clearing
- * gone. "I came across your shop this week and spent some time on your site"
+ * Ordered the way a person would actually say it, with the throat-clearing gone
+ * and no compliment. Praising a stranger's product to open a cold email is the
+ * oldest tell there is, and a reader who has had ten of them reads it as
+ * technique rather than as interest. "I came across your shop this week and spent some time on your site"
  * told the reader nothing they did not know and delayed the point by a
  * paragraph, so the email now opens on who is writing and why.
  *
@@ -103,13 +97,11 @@ function ctaFor(persona, entity, det) {
  * offer creates work whether or not they reply. The close simply says what to
  * do if they want it looked at.
  */
-function buildBody({ env, persona, name, greeting, liked, benefit, why, fix, closing }) {
+function buildBody({ env, persona, name, greeting, benefit, why, fix, closing }) {
   return [
     greeting,
     '',
     `I'm ${senderName(env)}. ${persona.context}`,
-    liked ? '' : null,
-    liked ? `I stopped on ${lowerFirst(liked)}.` : null,
     '',
     `${name} could benefit from ${lowerFirst(benefit)}.`,
     why ? '' : null,
@@ -149,20 +141,6 @@ export function composeDraft(entity, env) {
     || firstClause(entity.system_opportunity);
   if (!opportunity) return null;
 
-  // The evidence rule. A compliment must be real: backed by page text, and
-  // specific rather than an attribute list.
-  const hasRealCompliment =
-    Boolean(p.liked) && !p.evidence_rejected && isSpecificCompliment(p.liked);
-
-  // No honest compliment does NOT mean no email.
-  //
-  // Requiring one was dropping 46 of 120 leads in a single queue build — more
-  // than a third — including businesses with a perfectly concrete, measured
-  // problem worth writing about. The rule that matters is "never invent
-  // praise", not "never write without praise". So when there is nothing real
-  // to admire, the email simply opens on the observation instead.
-  if (!hasRealCompliment) return composeObservationDraft(entity, env, persona, opportunity);
-
   const name = displayName(entity);
   const greeting = entity.founder_name ? `Hi ${firstName(entity.founder_name)},` : 'Hello,';
 
@@ -189,40 +167,6 @@ export function composeDraft(entity, env) {
     body,
     cta: persona.offer,
     persona: entity.niche || 'lifestyle_brand',
-  };
-}
-
-/**
- * Draft that leads with the observation rather than a compliment.
- *
- * Used when nothing evidence-backed was found to admire. It says less, and
- * what it says is true, which is the whole point. Still shorter than the
- * complimented version because there is less to legitimately say.
- */
-function composeObservationDraft(entity, env, persona, opportunity) {
-  if (!entity.contact_email) return null;
-
-  const name = displayName(entity);
-  const greeting = entity.founder_name ? `Hi ${firstName(entity.founder_name)},` : 'Hello,';
-
-  const finding = plainEnglish(opportunity);
-  const why = consequenceOf(finding);
-  const benefit = benefitOf(opportunity);
-
-  const body = buildBody({
-    env, persona, name, greeting,
-    liked: null,
-    benefit: benefitOf(opportunity),
-    why,
-    fix: fixFor(opportunity),
-    closing: CLOSING,
-  });
-
-  return {
-    subject: stripControl(`${name} — a few notes on your site`).slice(0, 200),
-    body,
-    cta: 'observation-led',
-    persona: `${entity.niche || 'lifestyle_brand'}:observation`,
   };
 }
 

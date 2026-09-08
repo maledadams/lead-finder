@@ -180,7 +180,8 @@ function card(r, CAN_SEND = false) {
     <button class="no" data-open="reason">Skip &hellip;</button>
     <span class="notes"><span class="nlab">Notes:</span><input class="npill"
       data-field="note" placeholder="what did it get wrong?" maxlength="200"
-      autocomplete="off" aria-label="Correct this record"></span>
+      autocomplete="off" aria-label="Correct this record"><button class="nsend"
+      data-act="note" title="Send this note">Send note</button></span>
   </div>
 
   ${editor(r)}
@@ -417,7 +418,8 @@ function rowActions(r, view) {
       <button class="no" data-open="bounce">It bounced&hellip;</button>
       <span class="notes"><span class="nlab">Notes:</span><input class="npill"
       data-field="note" placeholder="what did it get wrong?" maxlength="200"
-      autocomplete="off" aria-label="Correct this record"></span>
+      autocomplete="off" aria-label="Correct this record"><button class="nsend"
+      data-act="note" title="Send this note">Send note</button></span>
     </div>${bounceDrawer()}`;
   }
   if (view === 'skipped') {
@@ -425,7 +427,8 @@ function rowActions(r, view) {
       <button data-act="revive">Edit &amp; put back in the queue</button>
       <span class="notes"><span class="nlab">Notes:</span><input class="npill"
       data-field="note" placeholder="what did it get wrong?" maxlength="200"
-      autocomplete="off" aria-label="Correct this record"></span>
+      autocomplete="off" aria-label="Correct this record"><button class="nsend"
+      data-act="note" title="Send this note">Send note</button></span>
     </div>`;
   }
   // bounced: only offer the requeue once there is somewhere to send it.
@@ -434,7 +437,8 @@ function rowActions(r, view) {
     ${r.contact_email ? '' : '<span class="dim sm">needs an address first</span>'}
     <span class="notes"><span class="nlab">Notes:</span><input class="npill"
       data-field="note" placeholder="what did it get wrong?" maxlength="200"
-      autocomplete="off" aria-label="Correct this record"></span>
+      autocomplete="off" aria-label="Correct this record"><button class="nsend"
+      data-act="note" title="Send this note">Send note</button></span>
   </div>`;
 }
 
@@ -582,8 +586,10 @@ try {
   .why.sm{font-size:13px;margin:6px 0}
   details{margin:12px 0 0}
   summary{cursor:pointer;font-size:13.5px;color:var(--muted);user-select:none;padding:6px 0}
-  .mail{background:var(--c-2);border-radius:var(--r-m);padding:14px;white-space:pre-wrap;
-        font-size:13.5px;line-height:1.65;margin-top:8px;max-width:68ch}
+  /* Fills the card. It used to stop at 68ch inside a 1100px column, which left
+     a narrow block sitting in a much wider box and looked misaligned. */
+  .mail{background:var(--c-2);border-radius:var(--r-m);padding:16px 18px;white-space:pre-wrap;
+        font-size:13.5px;line-height:1.7;margin-top:8px;width:100%;display:block}
 
   .rows{border-top:1px solid var(--line);margin-top:18px}
   .row{display:grid;grid-template-columns:1fr auto;gap:6px 20px;padding:15px 4px;
@@ -610,9 +616,11 @@ try {
   button.no:hover:not(:disabled){background:color-mix(in srgb,var(--bad) 20%,transparent)}
   button:disabled{opacity:.45;cursor:default}
   .acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center}
-  .notes{display:inline-flex;align-items:center;gap:7px;margin-left:auto}
+  .notes{display:flex;align-items:center;gap:7px;margin-left:auto;flex:1;min-width:280px;max-width:520px}
   .nlab{font-size:12.5px;color:var(--muted);white-space:nowrap}
-  .npill{font:inherit;font-size:13px;padding:6px 13px;border-radius:99px;width:250px;
+  .nsend{padding:6px 13px;border-radius:99px;font-size:12.5px;white-space:nowrap;flex:none}
+  .npill{font:inherit;font-size:13px;padding:6px 13px;border-radius:99px;
+         flex:1;min-width:180px;
          border:1px solid var(--line);background:var(--c-2);color:var(--fg);
          transition:border-color .15s,background .15s}
   .npill:focus{background:var(--c-1);border-color:var(--accent);outline:none}
@@ -624,7 +632,7 @@ try {
 
   .drawer{display:none;margin-top:12px}
   .drawer.open{display:block}
-  .drawer input,.drawer textarea{width:100%;max-width:68ch;font:inherit;font-size:13.5px;
+  .drawer input,.drawer textarea{width:100%;font:inherit;font-size:13.5px;
     padding:10px 12px;border-radius:var(--r-m);border:1px solid var(--line);
     background:var(--c-2);color:var(--fg)}
   .drawer textarea{min-height:64px;line-height:1.65;resize:vertical}
@@ -793,13 +801,10 @@ function go(changes){
   location.assign(u.pathname + u.search);
 }
 
-// A correction is a sentence, not a form. Enter sends it.
-document.addEventListener('keydown', async (ev) => {
-  const el = ev.target;
-  if (ev.key !== 'Enter' || !el.classList?.contains('npill')) return;
-  ev.preventDefault();
+// Sending a note: the button, or Enter in the field. One path for both.
+async function sendNote(el){
   const note = (el.value || '').trim();
-  if (note.length < 4) { flash('Say what it got wrong'); return; }
+  if (note.length < 4) { flash('Say what it got wrong'); el.focus(); return; }
 
   const card = holder(el);
   el.disabled = true;
@@ -820,6 +825,13 @@ document.addEventListener('keydown', async (ev) => {
     el.value = '';
     setTimeout(()=>location.reload(), 1800);
   } catch(e){ el.disabled = false; flash(e.message); }
+}
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter' && ev.target.classList?.contains('npill')) {
+    ev.preventDefault();
+    sendNote(ev.target);
+  }
 });
 
 document.addEventListener('change', (ev) => {
@@ -834,6 +846,9 @@ document.addEventListener('click', async (ev) => {
   const card = holder(b);
   const id = card && card.dataset.oid;
 
+  if(b.dataset.act === 'note'){
+    return sendNote(b.closest('.notes').querySelector('.npill'));
+  }
   if(b.dataset.page) return go({ page: b.dataset.page });
   if(b.dataset.act === 'clear') return go({ q:'', from:'', to:'' });
 

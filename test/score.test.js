@@ -259,8 +259,10 @@ test('a lead with a real problem but no compliment still gets an email', async (
     personalization: JSON.stringify({ liked: 'aesthetic personality and unique products' }),
   }, env);
   assert.ok(d, 'should still produce a draft');
-  assert.match(d.persona, /observation/);
-  assert.ok(!/aesthetic personality/.test(d.body), 'must not use the rejected compliment');
+  // No compliment appears in any draft now, invented or genuine, so there is
+  // one composition path and no :observation suffix to distinguish them.
+  assert.ok(!/aesthetic personality/.test(d.body), 'no compliment may reach the body');
+  assert.ok(!/I stopped on|genuinely great|is lovely/.test(d.body), 'no praise at all');
 
   // But nothing to say at all still means no email.
   assert.equal(composeDraft({

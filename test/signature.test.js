@@ -242,13 +242,19 @@ test('every email states the problem, the cost, and the fix', async () => {
   assert.match(d.body, /The fix is a real checkout/, 'what fixing it involves');
 });
 
-test('a compliment reads correctly whether it is singular or plural', async () => {
-  // "The tin-glaze bowls is what made me look" was the bug.
-  const plural = await draftFor('no meta description', { personalization: '{"liked":"the tin-glaze bowls"}' });
-  const singular = await draftFor('no meta description', { personalization: '{"liked":"the layered denim capsule"}' });
-  assert.match(plural.body, /I stopped on the tin-glaze bowls\./);
-  assert.match(singular.body, /I stopped on the layered denim capsule\./);
-  assert.doesNotMatch(plural.body, /bowls is what/);
+test('no draft compliments the recipient, however good the material', () => {
+  // Praising a stranger's product to open a cold email is the oldest tell
+  // there is. Even a genuine, evidence-backed compliment is left out.
+  const withMaterial = composeDraft({
+    id: 'e1', display_name: 'Marlowe Pottery', contact_email: 'a@b.co', niche: 'craft_goods',
+    website_opportunity: 'orders taken manually by DM or email',
+    personalization: '{"liked":"the tin-glaze bowls"}',
+  }, env);
+  assert.doesNotMatch(withMaterial.body, /tin-glaze/, 'the liked thing must not appear');
+  assert.doesNotMatch(withMaterial.body, /I stopped on/);
+  // The email still opens on who is writing, then goes straight to the point.
+  assert.match(withMaterial.body.split('\n')[2], /^I'm /);
+  assert.match(withMaterial.body, /Marlowe Pottery could benefit from/);
 });
 
 test('a business with no website gets the same shape', async () => {
