@@ -56,17 +56,20 @@ export async function recordFeedback(db, { entityId, outreachId, decision, reaso
  * pattern across several rejections, which is also what makes it cheap.
  */
 export async function deriveLessons(env, db, { minBatch = 3, limit = 25 } = {}) {
-  // BOUNCED is excluded on purpose. A bounce is a fact about an address, not a
-  // judgement about the business, and its reason text ("mailer-daemon: user
-  // unknown") would otherwise be handed to the model as if it were a reviewer
-  // explaining why a lead was bad.
+  // BOUNCED and CORRECTED are excluded on purpose. Neither is a judgement about
+  // whether a lead was worth contacting. A bounce is a fact about an address,
+  // and a correction is a fact about the record — "it sells tea, not skincare"
+  // would otherwise be read as a reason to avoid tea shops.
+  //
+  // A correction still teaches: it rewrites the record and clears
+  // last_evaluated_at, so the lead is re-scored as the business it actually is.
   const { results } = await db
     .prepare(
       `SELECT f.id, f.decision, f.reason, f.niche_at_time, f.score_at_time,
               e.display_name, e.website, e.website_opportunity, e.system_opportunity
        FROM feedback f JOIN entities e ON e.id = f.entity_id
        WHERE f.applied = 0 AND f.reason IS NOT NULL AND length(f.reason) > 3
-         AND f.decision <> 'BOUNCED'
+         AND f.decision NOT IN ('BOUNCED','CORRECTED')
        ORDER BY f.created_at LIMIT ?`
     )
     .bind(limit)

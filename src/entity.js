@@ -436,3 +436,46 @@ async function enrichExisting(db, entityId, candidate, norm) {
     .bind(...cols.map((c) => patch[c]), nowIso(), entityId)
     .run();
 }
+
+/**
+ * Which name actually belongs to the site we are about to write to.
+ *
+ * A directory record and a website can disagree. OpenStreetMap listed
+ * "Glasshaus Gardens" with a website tag pointing at fettlebotanic.com — a
+ * different business entirely — and because the stored name was only ever
+ * written with COALESCE, the site's own name could never replace it. The draft
+ * then opened by greeting the wrong company.
+ *
+ * The domain is the tie-breaker, because the domain is what the email is
+ * actually going to. A stored name that shares nothing with it, beaten by a
+ * site name that does, is the directory being wrong about which website
+ * belongs to whom.
+ *
+ * Deliberately conservative: when neither matches the domain, or both do, the
+ * existing name is kept. A rename should need evidence.
+ */
+export function preferredName(stored, siteName, domain) {
+  const clean = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const root = clean(String(domain || '').split('.')[0]);
+  if (!root || !siteName) return stored || siteName || null;
+  if (!stored) return siteName;
+
+  // Does either name share a real chunk with the domain?
+  const overlaps = (name) => {
+    const n = clean(name);
+    if (!n) return false;
+    if (n.includes(root) || root.includes(n)) return true;
+    // Or any single word of it, long enough not to be a coincidence.
+    return String(name).split(/\s+/).some((w) => {
+      const c = clean(w);
+      return c.length >= 5 && root.includes(c);
+    });
+  };
+
+  const storedFits = overlaps(stored);
+  const siteFits = overlaps(siteName);
+
+  // Only when the site agrees with the domain and the stored name does not.
+  if (siteFits && !storedFits) return siteName;
+  return stored;
+}

@@ -178,6 +178,9 @@ function card(r, CAN_SEND = false) {
     <button data-copy="1">Copy email</button>
     ${CAN_SEND ? '<button data-act="sent">Already sent it myself</button>' : ''}
     <button class="no" data-open="reason">Skip &hellip;</button>
+    <span class="notes"><span class="nlab">Notes:</span><input class="npill"
+      data-field="note" placeholder="what did it get wrong?" maxlength="200"
+      autocomplete="off" aria-label="Correct this record"></span>
   </div>
 
   ${editor(r)}
@@ -412,17 +415,26 @@ function rowActions(r, view) {
       ${btn('GHOSTED', 'Ghosted')}
       ${st ? '<button data-act="status" data-status="">Clear</button>' : ''}
       <button class="no" data-open="bounce">It bounced&hellip;</button>
+      <span class="notes"><span class="nlab">Notes:</span><input class="npill"
+      data-field="note" placeholder="what did it get wrong?" maxlength="200"
+      autocomplete="off" aria-label="Correct this record"></span>
     </div>${bounceDrawer()}`;
   }
   if (view === 'skipped') {
     return `<div class="acts">
       <button data-act="revive">Edit &amp; put back in the queue</button>
+      <span class="notes"><span class="nlab">Notes:</span><input class="npill"
+      data-field="note" placeholder="what did it get wrong?" maxlength="200"
+      autocomplete="off" aria-label="Correct this record"></span>
     </div>`;
   }
   // bounced: only offer the requeue once there is somewhere to send it.
   return `<div class="acts">
     <button data-act="revive"${r.contact_email ? '' : ' disabled'}>Edit &amp; put back in the queue</button>
     ${r.contact_email ? '' : '<span class="dim sm">needs an address first</span>'}
+    <span class="notes"><span class="nlab">Notes:</span><input class="npill"
+      data-field="note" placeholder="what did it get wrong?" maxlength="200"
+      autocomplete="off" aria-label="Correct this record"></span>
   </div>`;
 }
 
@@ -598,6 +610,14 @@ try {
   button.no:hover:not(:disabled){background:color-mix(in srgb,var(--bad) 20%,transparent)}
   button:disabled{opacity:.45;cursor:default}
   .acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center}
+  .notes{display:inline-flex;align-items:center;gap:7px;margin-left:auto}
+  .nlab{font-size:12.5px;color:var(--muted);white-space:nowrap}
+  .npill{font:inherit;font-size:13px;padding:6px 13px;border-radius:99px;width:250px;
+         border:1px solid var(--line);background:var(--c-2);color:var(--fg);
+         transition:border-color .15s,background .15s}
+  .npill:focus{background:var(--c-1);border-color:var(--accent);outline:none}
+  .npill:disabled{opacity:.5}
+  @media (max-width:768px){ .notes{margin-left:0;width:100%} .npill{flex:1;width:auto} }
   button.link{background:none;border:0;padding:0;font-size:13px;color:var(--accent);
               text-decoration:underline;text-underline-offset:2px;font-weight:500}
   button.link:hover:not(:disabled){background:none;color:var(--p600)}
@@ -772,6 +792,27 @@ function go(changes){
   if (!('page' in changes)) u.searchParams.delete('page');
   location.assign(u.pathname + u.search);
 }
+
+// A correction is a sentence, not a form. Enter sends it.
+document.addEventListener('keydown', async (ev) => {
+  const el = ev.target;
+  if (ev.key !== 'Enter' || !el.classList?.contains('npill')) return;
+  ev.preventDefault();
+  const note = (el.value || '').trim();
+  if (note.length < 4) { flash('Say what it got wrong'); return; }
+
+  const card = holder(el);
+  el.disabled = true;
+  try {
+    const res = await post('/api/entity/' + card.dataset.eid + '/correct', {note});
+    const changed = (res.changed || []).length
+      ? 'Fixed ' + res.changed.join(', ')
+      : 'Noted — nothing needed changing';
+    flash(res.rejected?.length ? changed + ' (' + res.rejected[0] + ')' : changed);
+    el.value = '';
+    setTimeout(()=>location.reload(), 1400);
+  } catch(e){ el.disabled = false; flash(e.message); }
+});
 
 document.addEventListener('change', (ev) => {
   const el = ev.target;

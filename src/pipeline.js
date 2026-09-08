@@ -27,7 +27,7 @@ import {
   storeCandidates, validateBatch,
 } from './keywords.js';
 import { ingestSeeds } from './discover.js';
-import { newId, nowIso, normalizeUrl, resolveEntity } from './entity.js';
+import { newId, nowIso, normalizeUrl, preferredName, resolveEntity } from './entity.js';
 
 export async function runCrawl(env, db) {
   const runId = newId();
@@ -519,7 +519,7 @@ async function processOne(env, db, ctx) {
          power_signals = ?, creative_signals = ?, personalization = ?,
          contact_email = COALESCE(contact_email, ?),
          contact_source = COALESCE(contact_source, ?),
-         display_name = COALESCE(display_name, ?),
+         display_name = ?,
          reject_reason = ?, last_evaluated_at = ?, updated_at = ?
        WHERE id = ?`
     )
@@ -547,7 +547,13 @@ async function processOne(env, db, ctx) {
       }),
       pickEmail(signals.emails),
       signals.emails?.length ? 'website' : null,
-      signals.og_site_name || cleanTitle(signals.title) || null,
+      // The site's own name wins only when the stored one disagrees with the
+      // domain we are writing to and the site's agrees. See preferredName.
+      preferredName(
+        entity.display_name,
+        signals.og_site_name || cleanTitle(signals.title) || null,
+        entity.domain || signals.domain
+      ),
       final.vetoed ? (ai?.veto_reason || 'ai-veto') : null,
       nowIso(),
       nowIso(),

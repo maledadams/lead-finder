@@ -10,6 +10,7 @@ import { renderDashboard } from './dashboard.js';
 import { PERIODS } from './metrics.js';
 import { canReceiveMail } from './mx.js';
 import { syncBounces } from './bounces.js';
+import { applyCorrection } from './correct.js';
 import {
   canSpamFooter, hasCanSpamFooter, stripControl, stripControlKeepLines,
 } from './outreach.js';
@@ -514,6 +515,17 @@ export default {
       if (back && request.method === 'POST') {
         const res = await revive(db, back[1]);
         return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 409));
+      }
+
+      // Tell the system what it got wrong, in a sentence. The model works out
+      // which fields that implies and every one is validated before it lands.
+      const correct = url.pathname.match(/^\/api\/entity\/([\w-]+)\/correct$/);
+      if (correct && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const res = await applyCorrection(env, db, correct[1], body.note, {
+          reviewer: signedInAs || 'dashboard',
+        });
+        return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 400));
       }
 
       // Did they answer? Set by hand from the Sent page; the nightly sweep
