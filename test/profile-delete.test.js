@@ -22,6 +22,8 @@ function fresh() {
   raw.exec(SCHEMA);
   raw.exec(`
     INSERT INTO profiles (id,slug,name,active,is_default,created_at,updated_at)
+      VALUES ('p-creative','creative','Creative',1,1,'2026-01-01','2026-01-01');
+    INSERT INTO profiles (id,slug,name,active,is_default,created_at,updated_at)
       VALUES ('p-medium','medium','Medium businesses',1,0,'2026-01-02','2026-01-02');
     INSERT INTO entities (id,profile_id,display_name,domain,contact_email,state,first_seen_at,updated_at)
       VALUES ('e1','p-medium','Northgate Dental','northgate.com','a@northgate.com','CONTACTED','2026-09-01','2026-09-01');

@@ -1,3 +1,19 @@
+# ---------------------------------------------------------------------------
+# TO RUN YOUR OWN COPY, change exactly these three lines:
+#
+#   database_id     from `npx wrangler d1 create lead-finder`
+#   routes.pattern  your own hostname, behind Cloudflare Access
+#   ZOHO_CLIENT_ID  from your own Zoho API console
+#
+# then set the secrets listed further down. Nothing else here is specific to
+# any one deployment: the categories, the email copy and the scoring brief are
+# written at first run from a sentence describing who you want to reach, and
+# live in the database rather than in this repository.
+#
+# Neither the database id nor the hostname is a credential — both are useless
+# without your Cloudflare account — so they are left filled in as a worked
+# example rather than as placeholders that break the file.
+# ---------------------------------------------------------------------------
 name = "lead-finder"
 main = "src/index.js"
 compatibility_date = "2025-09-01"
@@ -5,7 +21,7 @@ compatibility_flags = ["nodejs_compat"]
 
 # workers.dev is off deliberately. It is a second hostname reaching the same
 # Worker without passing through Cloudflare Access, which would make the Access
-# policy on leads.maledadams.work decorative.
+# policy on your custom domain decorative.
 workers_dev = false
 
 # ---------------------------------------------------------------------------
@@ -32,14 +48,14 @@ crons = ["0 5 * * *", "0 6 * * *", "0 7 * * *", "0 11 * * *"]
 # control, which is why this is not on workers.dev.
 # ---------------------------------------------------------------------------
 [[routes]]
-pattern = "leads.maledadams.work"
+pattern = "leads.maledadams.work"    # your own hostname, behind Cloudflare Access
 custom_domain = true
 
 [[d1_databases]]
 binding = "DB"
 database_name = "lead-finder"
 # Replace with the id printed by `npm run db:create`.
-database_id = "e8410da3-3981-428c-ba18-d5995825811e"  # replace with your own: `wrangler d1 create`
+database_id = "e8410da3-3981-428c-ba18-d5995825811e"  # yours: `npx wrangler d1 create lead-finder`
 
 [ai]
 binding = "AI"
@@ -103,7 +119,7 @@ REQUIRE_ACCESS = "true"
 
 # Zoho Mail sending. The client secret is a secret; the refresh token is
 # obtained once via /api/zoho/connect and stored in D1.
-ZOHO_CLIENT_ID = "1000.REDACTED_CLIENT_ID"
+ZOHO_CLIENT_ID = "REPLACE_WITH_YOUR_ZOHO_CLIENT_ID"
 ZOHO_REGION = "com"          # com | eu | in | au | jp
 DAILY_SEND_CAP = "30"        # a hard ceiling no bug can exceed
 

@@ -11,15 +11,19 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import {
   categoryCounts, classifyPending, deleteCategory, listCategories,
-  matchByKeyword, upsertCategory,
+  matchByKeyword, seedDefaultCategories, upsertCategory,
 } from '../src/categories.js';
 
 const SCHEMA = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 
-function fresh({ reply = null } = {}) {
+// A fresh install ships no profile and no categories: setting one up creates
+// both, which is what this fixture stands in for.
+async function fresh({ reply = null } = {}) {
   const raw = new DatabaseSync(':memory:');
   raw.exec(SCHEMA);
   raw.exec(`
+    INSERT INTO profiles (id,slug,name,active,is_default,created_at,updated_at)
+      VALUES ('p-creative','creative','Creative',1,1,'2026-01-01','2026-01-01');
     INSERT INTO entities (id, profile_id, display_name, state, first_seen_at, updated_at)
       VALUES ('e1','p-creative','Marlowe','NURTURE','2026-09-01','2026-09-01');
   `);
@@ -36,6 +40,7 @@ function fresh({ reply = null } = {}) {
     async batch(st) { return st.map((x) => ({ meta: { changes: run(x.sql, x.args).changes } })); },
   };
   const env = { AI: { run: async (model, opts) => { calls.push(opts); return { response: reply }; } } };
+  await seedDefaultCategories(db, 'p-creative');
   return { raw, db, env, calls };
 }
 
@@ -49,7 +54,7 @@ const addSkip = (raw, id, reason) => raw.exec(
 // ---------------------------------------------------------------------------
 
 test('the shipped categories are data, and can be edited and removed', async () => {
-  const { raw, db } = fresh();
+  const { raw, db } = await fresh();
   const before = await listCategories(db, 'p-creative');
   assert.equal(before.length, 4, 'four arrive seeded');
 
@@ -64,7 +69,7 @@ test('the shipped categories are data, and can be edited and removed', async () 
 });
 
 test('a keyword match costs no model call at all', async () => {
-  const { raw, db, env, calls } = fresh();
+  const { raw, db, env, calls } = await fresh();
   addSkip(raw, 'f1', 'their site is already great');
 
   const report = await classifyPending(env, db, 'p-creative');
@@ -77,7 +82,7 @@ test('a keyword match costs no model call at all', async () => {
 });
 
 test('everything the keywords miss goes in ONE call, not one each', async () => {
-  const { raw, db, env, calls } = fresh({
+  const { raw, db, env, calls } = await fresh({
     reply: { answers: [{ i: 0, category: 'not_a_fit' }, { i: 1, category: 'difficult' }, { i: 2, category: 'none' }] },
   });
   addSkip(raw, 'f1', 'they run twelve locations across three states');
@@ -95,7 +100,7 @@ test('everything the keywords miss goes in ONE call, not one each', async () => 
 });
 
 test('nothing is ever classified twice', async () => {
-  const { raw, db, env, calls } = fresh({ reply: { answers: [{ i: 0, category: 'not_a_fit' }] } });
+  const { raw, db, env, calls } = await fresh({ reply: { answers: [{ i: 0, category: 'not_a_fit' }] } });
   addSkip(raw, 'f1', 'they run twelve locations');
 
   await classifyPending(env, db, 'p-creative');
@@ -107,7 +112,7 @@ test('nothing is ever classified twice', async () => {
 });
 
 test('a reason the model could not place is not reconsidered forever', async () => {
-  const { raw, db, env, calls } = fresh({ reply: { answers: [{ i: 0, category: 'none' }] } });
+  const { raw, db, env, calls } = await fresh({ reply: { answers: [{ i: 0, category: 'none' }] } });
   addSkip(raw, 'f1', 'utterly unclassifiable');
 
   await classifyPending(env, db, 'p-creative');
@@ -116,7 +121,7 @@ test('a reason the model could not place is not reconsidered forever', async () 
 });
 
 test('editing a definition re-sorts what was filed under the old one', async () => {
-  const { raw, db, env, calls } = fresh({ reply: { answers: [{ i: 0, category: 'not_a_fit' }] } });
+  const { raw, db, env, calls } = await fresh({ reply: { answers: [{ i: 0, category: 'not_a_fit' }] } });
   addSkip(raw, 'f1', 'they run twelve locations');
   await classifyPending(env, db, 'p-creative');
   assert.equal(calls.length, 1);
@@ -134,7 +139,7 @@ test('editing a definition re-sorts what was filed under the old one', async () 
 });
 
 test('deleting a category keeps the reasons and returns them to unsorted', async () => {
-  const { raw, db, env } = fresh();
+  const { raw, db, env } = await fresh();
   addSkip(raw, 'f1', 'their site is already great');
   await classifyPending(env, db, 'p-creative');
 
@@ -147,7 +152,7 @@ test('deleting a category keeps the reasons and returns them to unsorted', async
 });
 
 test('the chart shows the busiest four and says what it left out', async () => {
-  const { raw, db } = fresh();
+  const { raw, db } = await fresh();
   // Six categories, so the top four plus an honest remainder.
   for (const n of ['Alpha', 'Beta']) await upsertCategory(db, 'p-creative', { name: n });
   const cats = await listCategories(db, 'p-creative');
@@ -169,7 +174,7 @@ test('the chart shows the busiest four and says what it left out', async () => {
 });
 
 test('a window with an end excludes what falls outside it', async () => {
-  const { raw, db } = fresh();
+  const { raw, db } = await fresh();
   raw.exec(`INSERT INTO feedback (id, profile_id, entity_id, decision, reason, reviewer, created_at)
             VALUES ('old','p-creative','e1','SKIPPED','x','test','2026-08-30'),
                    ('mid','p-creative','e1','SKIPPED','x','test','2026-09-05'),
@@ -186,7 +191,7 @@ test('matchByKeyword needs a real keyword, not an empty one', () => {
 });
 
 test('classification refuses to run without a profile', async () => {
-  const { db, env } = fresh();
+  const { db, env } = await fresh();
   await assert.rejects(() => classifyPending(env, db, null), /needs a profileId/);
   await assert.rejects(() => listCategories(db, null), /needs a profileId/);
 });

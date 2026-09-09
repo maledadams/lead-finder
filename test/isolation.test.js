@@ -25,10 +25,10 @@ import { metrosFor } from '../src/regions.js';
 
 const SCHEMA = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 
-// The real second profile, not a stub. Loading the migration that ships means
-// this suite also proves the medium-business configuration parses, that its
+// A real second profile, not a stub — the worked example in examples/. Loading
+// it means this suite also proves a full profile configuration parses, that its
 // niche labels resolve, and that its slug is reachable.
-const MEDIUM = readFileSync(new URL('../migrations/009_medium_profile.sql', import.meta.url), 'utf8');
+const MEDIUM = readFileSync(new URL('../examples/profile-medium-businesses.sql', import.meta.url), 'utf8');
 const DAY = '2026-09-08';
 
 /** Two profiles, each with a lead, a draft, a sent email, a skip and a lesson. */
@@ -36,7 +36,16 @@ function fresh() {
   const raw = new DatabaseSync(':memory:');
   raw.exec(SCHEMA);
   raw.exec(MEDIUM);
+  raw.exec(`    INSERT INTO profiles (id,slug,name,active,is_default,created_at,updated_at)
+      VALUES ('p-creative','creative','Creative',1,1,'2026-01-01','2026-01-01');
+`);
+
   raw.exec(`
+    -- Categories belong to a profile, not to the code, so the fixture gives
+    -- this one its own rather than leaning on a built-in taxonomy.
+    UPDATE profiles SET niches = '{"craft_goods":{"label":"Handmade & craft goods"}}'
+      WHERE id = 'p-creative';
+
     INSERT INTO entities (id,profile_id,display_name,domain,website,niche,contact_email,
                           score,state,first_seen_at,updated_at,first_contacted_at)
       VALUES ('e-cer','p-creative','Marlowe Ceramics','marloweceramics.com','https://marloweceramics.com',
@@ -197,7 +206,10 @@ test('skip categories belong to one profile', async () => {
   // Both profiles get the same four seeded names, but they are different rows.
   // p-medium is created by migration 009, which predates categories entirely —
   // exactly what happens to any profile added before this feature existed.
+  // A fresh install ships none at all; setting a profile up creates its own.
+  assert.equal((await listCategories(db, creative.id)).length, 0);
   assert.equal((await listCategories(db, medium.id)).length, 0);
+  await seedDefaultCategories(db, creative.id);
   await seedDefaultCategories(db, medium.id);
 
   const a = await listCategories(db, creative.id);

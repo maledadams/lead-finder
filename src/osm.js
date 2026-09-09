@@ -30,6 +30,7 @@
 //     sweep's job.
 
 import { normalizeDomain, nowIso } from './entity.js';
+import { DEFAULT_NICHE } from './config.js';
 
 // Public Overpass instances, tried in order.
 //
@@ -60,131 +61,70 @@ const OVERPASS_UA = 'LeadFinderBot/0.1';
 export { METROS, METROS_BY_STATE } from './metros.js';
 
 /**
- * Categories worth pulling. Deliberately excludes supermarkets, chains,
- * hardware and services — this is a creative-business filter, not a
- * business directory.
- */
-// Tightened after a first pass on Portland and Brooklyn returned mostly
-// ordinary local retail — florists, furniture showrooms, shoe shops. Those
-// categories are dominated by businesses with no creative identity, so they
-// are gone. What remains skews to maker-run and design-led premises.
-const SHOP_TAGS = [
-  'pottery', 'art', 'craft', 'jewelry', 'cosmetics', 'perfumery',
-  'stationery', 'chocolate', 'coffee', 'tea', 'antiques', 'second_hand',
-  'boutique', 'bag', 'music', 'photo', 'frame', 'candles', 'herbalist',
-  'confectionery', 'clothes',
-];
-
-// craft=* values that are actual makers, not trades.
-//
-// `tailor`, `dressmaker`, `shoemaker` and `upholsterer` were here and had to
-// go: in practice OSM uses them for dry cleaners, alteration counters and
-// repair shops. A single Brooklyn sweep returned Mulberry Cleaners, Yes
-// Cleaners, Coleman Cleaners, JSK Cleaners, Dunrite Cleaners, Eden Dry
-// Cleaners and Lucky U Cleaners — all tagged as craft, none of them a
-// creative business.
-const CRAFT_TAGS = [
-  'potter', 'jeweller', 'goldsmith', 'basket_maker', 'bookbinder',
-  'candlemaker', 'glassblower', 'leather', 'photographer', 'sculptor',
-  'painter', 'artist', 'printmaker', 'weaver', 'distillery', 'brewery',
-  'winery', 'confectionery',
-];
-
-// Service businesses that slip through on category alone. Matched against the
-// name, because the tagging does not distinguish them.
-const NOT_CREATIVE = /\b(?:cleaners?|dry\s*clean|laundr|alterations?|tailor(?:ing|s)?|shoe\s*repair|cobbler|locksmith|barber|nail\s*salon|pharmacy|deli|bodega|smoke\s*shop|check\s*cashing|wireless|mobile\s*repair)\b/i;
-
-// ---------------------------------------------------------------------------
-// What a profile looks for
-// ---------------------------------------------------------------------------
-
-/**
- * The OSM search a profile performs, derived from its own niches.
+ * The OpenStreetMap search a profile performs, derived from its own niches.
  *
- * The creative profile has no stored configuration and gets the hand-tuned
- * lists above — every exclusion in them was earned by a bad sweep, and none of
- * it generalises to clinics or plumbers. A configured profile brings its own
- * tags per niche, which is also how a result is classified: the niche that
- * claimed the tag owns the lead.
+ * NOTHING HERE IS BUILT IN. Which tags belong to which category, which names to
+ * exclude, and whether a business with no website still counts — all three are
+ * per profile, because none of them generalise. A hand-tuned list of craft tags
+ * that finds independent makers is exactly the wrong list for finding dental
+ * clinics, and the rule that a no-website lead needs an Instagram would throw
+ * away every plumber worth writing to.
  *
- * `social` is the real difference between the two populations. For a boutique
- * with no website, an Instagram IS the signal — it says the owner is
- * brand-conscious and has nowhere to send people. For a dental clinic it is
- * noise: a clinic with a phone and no website is exactly the lead, whether or
- * not anyone there posts. So the fallback contact tag differs.
+ * A profile that defines no tags simply discovers by keyword instead, which is
+ * what a brand-new install does until it is set up.
+ *
+ * `social` is the real difference between two populations. For a boutique with
+ * no website an Instagram IS the signal — it says the owner is brand-conscious
+ * and has nowhere to send people. For a clinic it is noise: a phone number and
+ * no website is the lead. So the fallback contact tag is a profile's choice.
  */
 export function osmSpecFor(profile) {
   const niches = profile?.niches || {};
-  const configured = Object.values(niches).some((n) => n?.osm);
-  if (!configured) {
-    return {
-      tags: { shop: SHOP_TAGS, craft: CRAFT_TAGS, amenity: [], healthcare: [], office: [] },
-      byNiche: null,
-      social: true,
-      nameFilter: NOT_CREATIVE,
-      fallbackNiche: 'lifestyle_brand',
-    };
-  }
-
   const fields = ['amenity', 'healthcare', 'craft', 'shop', 'office'];
   const tags = Object.fromEntries(fields.map((f) => [f, []]));
   const byNiche = {};
+  let configured = false;
+
   for (const [slug, n] of Object.entries(niches)) {
+    if (!n?.osm) continue;
+    configured = true;
     byNiche[slug] = {};
     for (const f of fields) {
-      const values = (Array.isArray(n?.osm?.[f]) ? n.osm[f] : []).map(String);
+      const values = (Array.isArray(n.osm[f]) ? n.osm[f] : []).map(String);
       byNiche[slug][f] = values;
       tags[f].push(...values);
     }
   }
   for (const f of fields) tags[f] = [...new Set(tags[f])];
+
+  // A profile's own exclusions, compiled once. Invalid patterns are ignored
+  // rather than thrown: a bad regex typed into Settings must not stop a crawl.
+  let nameFilter = null;
+  const pattern = profile?.discovery?.exclude_names;
+  if (pattern) {
+    try { nameFilter = new RegExp(pattern, 'i'); } catch { nameFilter = null; }
+  }
+
   return {
     tags,
-    byNiche,
-    social: false,
-    nameFilter: null,
-    fallbackNiche: Object.keys(niches)[0] || null,
+    byNiche: configured ? byNiche : null,
+    social: profile?.discovery?.social === true,
+    nameFilter,
+    fallbackNiche: Object.keys(niches)[0] || DEFAULT_NICHE,
   };
 }
 
 /** Map an OSM category onto a profile's niche taxonomy. */
 export function nicheForTags(tags, spec = osmSpecFor(null)) {
-  // A configured profile classifies by its own tag lists, so a lead can only
-  // ever land in a category that profile actually writes emails for.
+  // A lead can only ever land in a category this profile actually writes for.
   if (spec.byNiche) {
     for (const [slug, fields] of Object.entries(spec.byNiche)) {
       for (const [field, values] of Object.entries(fields)) {
         if (tags[field] && values.includes(tags[field])) return slug;
       }
     }
-    return spec.fallbackNiche;
   }
-  return creativeNiche(tags);
-}
-
-function creativeNiche(tags) {
-  const shop = tags.shop || '';
-  const craft = tags.craft || '';
-
-  if (['pottery', 'craft', 'houseware', 'candles'].includes(shop) ||
-      ['potter', 'basket_maker', 'candlemaker', 'glassblower', 'weaver', 'bookbinder', 'leather'].includes(craft)) {
-    return 'craft_goods';
-  }
-  if (shop === 'jewelry' || ['jeweller', 'goldsmith'].includes(craft)) return 'craft_goods';
-  if (['cosmetics', 'perfumery', 'herbalist'].includes(shop)) return 'beauty_wellness';
-  if (['bakery', 'chocolate', 'coffee', 'tea', 'deli', 'confectionery', 'health_food'].includes(shop) ||
-      ['distillery', 'brewery', 'winery', 'confectionery'].includes(craft)) {
-    return 'food_bev';
-  }
-  if (shop === 'art' || ['artist', 'sculptor', 'painter', 'printmaker', 'photographer'].includes(craft)) {
-    return 'artist_portfolio';
-  }
-  if (['clothes', 'shoes', 'bag', 'second_hand', 'antiques', 'boutique'].includes(shop) ||
-      ['tailor', 'dressmaker', 'shoemaker'].includes(craft)) {
-    return 'alt_fashion';
-  }
-  if (shop === 'photo') return 'creative_studio';
-  return 'lifestyle_brand';
+  return spec.fallbackNiche;
 }
 
 /**

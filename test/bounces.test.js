@@ -14,6 +14,8 @@ function harness({ messages = [], labelOk = true, listOk = true } = {}) {
   const raw = new DatabaseSync(':memory:');
   raw.exec(SCHEMA);
   raw.exec(`
+    INSERT INTO profiles (id,slug,name,active,is_default,created_at,updated_at)
+      VALUES ('p-creative','creative','Creative',1,1,'2026-01-01','2026-01-01');
     INSERT INTO app_settings (key, value, updated_at)
       VALUES ('zoho_account_id','acct','2026-01-01'),
              ('zoho_access_token','tok','2026-01-01'),

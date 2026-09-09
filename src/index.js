@@ -6,7 +6,7 @@ import {
   setResponseStatus, suppress, sweepGhosted, todayStr,
 } from './queue.js';
 import { ingestSeeds } from './discover.js';
-import { renderDashboard } from './dashboard.js';
+import { renderDashboard, setupPage } from './dashboard.js';
 import { PERIODS } from './metrics.js';
 import { canReceiveMail } from './mx.js';
 import { syncBounces } from './bounces.js';
@@ -194,7 +194,7 @@ function hasAccessAssertion(request) {
  * The email of whoever Cloudflare Access authenticated, or null.
  *
  * Trusting these headers is safe here for one specific reason: the only route
- * to this Worker is leads.maledadams.work, which sits behind Access, and
+ * to this Worker is the configured custom domain, which sits behind Access, and
  * workers.dev is disabled. A request cannot reach this code without Access
  * having verified it first, so the headers cannot be forged by a client.
  *
@@ -341,7 +341,7 @@ export default {
       if (!(await withinLimit(env.AUTH_LIMITER, `auth:${who}`))) return tooMany(120);
       // No sign-in page of our own.
       //
-      // Cloudflare Access sits in front of leads.maledadams.work and redirects
+      // Cloudflare Access sits in front of the custom domain and redirects
       // an unauthenticated browser to its own login before the request ever
       // reaches this Worker. Anything arriving here without credentials is a
       // machine, or a request that bypassed Access, and either way JSON is the
@@ -356,11 +356,34 @@ export default {
     // profile, because a query that quietly widened to both profiles would
     // return plausible-looking rows and never error.
     const wantedProfile = url.searchParams.get('profile') || cookie(request, PROFILE_COOKIE);
-    let profile;
+    let profile = null;
     try {
       profile = await resolveProfile(db, wantedProfile);
-    } catch (err) {
-      return json({ error: String(err?.message || err) }, 503);
+    } catch {
+      // No profile at all is a fresh install, not a fault. Everything that
+      // makes this system somebody's — the categories, the copy, the scoring
+      // brief — is written at setup rather than shipped in the schema.
+      profile = null;
+    }
+
+    if (!profile) {
+      if (url.pathname === '/api/setup' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const made = await createProfile(env, db, { name: body.name, brief: body.brief });
+        if (made.ok) await setDefaultProfile(db, made.id);
+        return json(made, made.ok ? 200 : 400);
+      }
+      if (request.method === 'GET' && (request.headers.get('accept') || '').includes('text/html')) {
+        const nonce = btoa(crypto.randomUUID()).replace(/=+$/, '');
+        return new Response(setupPage(env, nonce), {
+          headers: {
+            ...SECURITY_HEADERS,
+            'content-type': 'text/html; charset=utf-8',
+            'content-security-policy': cspFor(nonce),
+          },
+        });
+      }
+      return json({ error: 'not set up yet — open the dashboard in a browser' }, 503);
     }
     const pid = profile.id;
 
@@ -880,7 +903,7 @@ export default {
       }
 
       if (url.pathname === '/api/run/harvest' && request.method === 'POST') {
-        const h = await harvestWikipedia(db, pid, env.USER_AGENT);
+        const h = await harvestWikipedia(db, pid, env.USER_AGENT, profile);
         const mined = await mineCorpus(db, pid);
         const minedAdded = mined.length ? await storeCandidates(db, pid, mined, 'corpus') : 0;
         return json({ wikipedia: h, corpus_terms_added: minedAdded });

@@ -118,7 +118,7 @@ export async function addCity(db, { name, country = 'US', profileId = null, prio
   let hit;
   try {
     const res = await fetch(`${NOMINATIM}?${qs}`, {
-      headers: { 'User-Agent': userAgent || 'lead-finder (+https://github.com/maledadams/lead-finder)' },
+      headers: { 'User-Agent': userAgent || 'lead-finder' },
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return { ok: false, error: `the geocoder answered ${res.status}` };

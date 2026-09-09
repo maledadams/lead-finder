@@ -43,61 +43,15 @@ const CRT_ENDPOINT = 'https://crt.sh/';
 const CRT_TIMEOUT_MS = 25_000;
 
 /**
- * Domain-word keywords per niche.
+ * The bootstrap terms, used only until a profile has its own.
  *
- * Chosen to appear in indie brand domains while being uncommon in corporate
- * ones. Deliberately not generic ("shop", "store", "design") — those return
- * mostly noise and burn query budget.
+ * Deliberately thin and generic. A real search vocabulary is written per
+ * profile — generated from the sentence describing who you want to reach, then
+ * validated against how many real domains each term actually finds — because a
+ * list tuned for one trade is worse than useless for another.
  */
-// BOOTSTRAP ONLY. The live vocabulary lives in the `keywords` table and is
-// harvested from Wikipedia and mined from the corpus — see keywords.js.
-//
-// This list exists so a fresh database can run before its first harvest, and
-// every term in it has been checked against real crt.sh yield rather than
-// guessed. Two earlier attempts taught that lesson:
-//
-//   Literal nouns ("ceramics", "pottery") returned Saudi Ceramics, RAK
-//   Ceramics and Milford Ceramic Tile — industrial suppliers, because indie
-//   potters are called "Moth & Moon Studio".
-//
-//   Invented compounds ("wheelthrown", "cutecore", "handpoured", "gyaru")
-//   returned literally zero certificates. They read well and found nothing.
-//
-// What survives is plain roots with measured yield, shown in comments.
 export const SOURCE_KEYWORDS = {
-  alt_fashion: [
-    'lolita',      // 2983 certs
-    'emo',         //  491
-    'kawaii',      //   90
-    'harajuku',    //   68
-    'decora',      //   64
-    'goth',
-  ],
-  craft_goods: [
-    'letterpress', //   36
-    'macrame',
-    'printmaker',
-    'ceramicist',
-  ],
-  beauty_wellness: [
-    'apothecary',  //  189
-    'botanica',
-  ],
-  food_bev: [
-    'roastery',
-    'chocolatier',
-  ],
-  artist_portfolio: [
-    'atelier',     // 2350
-    'linocut',
-  ],
-  creative_studio: [
-    'designstudio',
-  ],
-  lifestyle_brand: [
-    'mercantile',  // 2532
-    'sundries',
-  ],
+  business: ['studio', 'workshop', 'atelier', 'boutique', 'collective'],
 };
 
 /** Flat list of every keyword, tagged with the niche it came from. */

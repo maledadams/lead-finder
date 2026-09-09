@@ -216,12 +216,12 @@ export function finalScore(det, ai) {
     // but it may not lower evidence-backed problems below what we measured.
     if (Number.isFinite(ai.need_score)) d.need = clamp(Math.max(d.need, ai.need_score));
 
-    // Hard veto: if Lucia would not want the work, nothing else matters.
-    if (ai.would_lucia_want === false) {
+    // Hard veto: if the sender would not want the work, nothing else matters.
+    if ((ai.worth_contacting ?? ai.would_lucia_want) === false) {
       return {
         score: Math.min(weighted(d), 35),
         dimensions: d,
-        reason: `AI veto: ${ai.veto_reason || 'not a fit for Lucia'}`,
+        reason: `AI veto: ${ai.veto_reason || 'not a fit for this profile'}`,
         vetoed: true,
       };
     }
@@ -247,7 +247,7 @@ export function finalScore(det, ai) {
  * social handle. That sounds weaker, and for `money` it is — but for `need`
  * it is the opposite. A shop with a real Instagram following and nowhere to
  * send people has the largest website opportunity there is, and usually knows
- * it. Lucia's own brief called this out: artists who need a real portfolio
+ * it. A scoring brief will often call this out: businesses that need a real site
  * site rather than a link-in-bio page.
  *
  * The deliberate asymmetry: need is high by construction, so money and

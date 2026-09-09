@@ -32,19 +32,16 @@ test('extractApexDomains takes apex domains only and dedupes', () => {
   assert.equal(new Set(out).size, out.length, 'no duplicates');
 });
 
-test('the bootstrap keyword list is small, unique, and covers every niche', () => {
-  // Small on purpose. This list only has to get a fresh database moving; the
-  // real vocabulary is harvested into the `keywords` table. Every term here
-  // has measured crt.sh yield rather than being invented.
+test('the bootstrap keyword list is thin and generic on purpose', () => {
+  // This only has to get a fresh database moving before a profile has its own
+  // search terms. Shipping a real vocabulary would mean shipping one person's
+  // idea of what to look for.
   const all = allKeywords();
   const words = all.map((k) => k.keyword);
   assert.equal(new Set(words).size, words.length, 'keywords must be unique');
-  assert.equal(new Set(all.map((k) => k.niche)).size, 7, 'every niche seeded');
-
-  // The subcultures Lucia named explicitly must be reachable from a cold start.
-  for (const must of ['lolita', 'emo', 'kawaii', 'harajuku', 'goth', 'decora']) {
-    assert.ok(words.includes(must), `bootstrap must include "${must}"`);
-  }
+  assert.ok(words.length <= 12, 'a bootstrap, not a vocabulary');
+  assert.deepEqual([...new Set(all.map((k) => k.niche))], ['business'],
+    'and it belongs to no particular kind of business');
 });
 
 test('the free name filter catches what it cheaply can', () => {

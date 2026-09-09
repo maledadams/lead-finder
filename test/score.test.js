@@ -68,8 +68,21 @@ test('extractSignals detects the broken-site problems', () => {
   assert.equal(s.manual_order_hint, true);
 });
 
-test('guessNiche classifies from page text', () => {
-  assert.equal(guessNiche(extractSignals(goodBrand, 'https://x.com'), NICHES, DEFAULT_NICHE), 'craft_goods');
+test('guessNiche classifies against whatever taxonomy it is handed', () => {
+  // The taxonomy is a profile's, not the code's, so the test brings one rather
+  // than asserting against somebody else's categories.
+  const vocab = {
+    ceramics: { label: 'Ceramics', keywords: ['ceramic', 'stoneware', 'glaze', 'kiln'] },
+    clinics: { label: 'Clinics', keywords: ['patient', 'appointment', 'dentist'] },
+  };
+  const signals = extractSignals(goodBrand, 'https://x.com');
+  assert.equal(guessNiche(signals, vocab, 'clinics'), 'ceramics');
+
+  // With nothing matching, it falls back rather than picking at random.
+  assert.equal(guessNiche({ text_sample: 'nothing relevant here' }, vocab, 'clinics'), 'clinics');
+
+  // And the shipped fallback taxonomy classifies anything as the one category.
+  assert.equal(guessNiche(signals, NICHES, DEFAULT_NICHE), 'business');
 });
 
 test('hardFilter rejects parked, empty and corporate pages', () => {
@@ -137,10 +150,10 @@ test('a bad website with no money signals does not score well', () => {
 test('finalScore lets AI raise need but never lower measured problems', () => {
   const s = extractSignals(brokenBrand, 'https://ashstudio.com');
   const d = deterministicScore(s, { domain: 'ashstudio.com' });
-  const lowered = finalScore(d, { need_score: 5, would_lucia_want: true });
+  const lowered = finalScore(d, { need_score: 5, worth_contacting: true });
   assert.equal(lowered.dimensions.need, d.dimensions.need, 'AI must not lower measured need');
 
-  const raised = finalScore(d, { need_score: 99, would_lucia_want: true });
+  const raised = finalScore(d, { need_score: 99, worth_contacting: true });
   assert.equal(raised.dimensions.need, 99);
 });
 
@@ -149,7 +162,7 @@ test('AI veto caps the score regardless of other dimensions', () => {
   const d = deterministicScore(s, { domain: 'mothandmoon.com' });
   const vetoed = finalScore(d, {
     fit_score: 95, creative_score: 95, conversion_score: 95,
-    would_lucia_want: false, veto_reason: 'dropshipper',
+    worth_contacting: false, veto_reason: 'dropshipper',
   });
   assert.ok(vetoed.score <= 35);
   assert.equal(vetoed.vetoed, true);
@@ -250,7 +263,7 @@ test('technical findings are translated for the recipient', async () => {
 
 test('a lead with a real problem but no compliment still gets an email', async () => {
   const { composeDraft } = await import('../src/outreach.js');
-  const env = { SENDER_NAME: 'Lucía Adams', SENDER_EMAIL: 'hi@x.com', SENDER_POSTAL_ADDRESS: '1 St' };
+  const env = { SENDER_NAME: 'Rowan Vale', SENDER_EMAIL: 'hi@x.com', SENDER_POSTAL_ADDRESS: '1 St' };
 
   // Requiring a compliment was dropping a third of the queue.
   const d = composeDraft({
@@ -305,4 +318,15 @@ test('internal field labels never survive into a draft, from any source', async 
   assert.ok(d);
   assert.ok(!/system opportunity:/i.test(d.body), 'field label leaked');
   assert.match(d.body, /booking flow for workshops/);
+});
+
+test('an evaluation cached under the old field name is still vetoed', () => {
+  // The field used to be named after one person. Renaming it must not silently
+  // un-veto every evaluation cached before the rename — those rows are still in
+  // the evaluations table and are read back whenever a page has not changed.
+  const sig = extractSignals(goodBrand, 'https://mothandmoon.com');
+  const d = deterministicScore(sig, { domain: 'mothandmoon.com' });
+  const legacy = finalScore(d, { would_lucia_want: false, veto_reason: 'dropshipper' });
+  assert.equal(legacy.vetoed, true, 'the old name is still honoured');
+  assert.ok(legacy.score <= 35);
 });

@@ -26,79 +26,29 @@ export const NEURONS_PER_EVAL = 75;
 // Seven buckets, not fifty. Each maps 1:1 to an outreach persona, so
 // classification and voice are the same decision.
 // ---------------------------------------------------------------------------
+/**
+ * The fallback taxonomy, used only until a profile defines its own.
+ *
+ * Deliberately one broad category rather than a set of opinions. Real
+ * categories — the ones that decide which email a business gets — are written
+ * per profile and stored in the database, because they are the part that
+ * belongs to whoever is running this rather than to the code.
+ *
+ * Setting a profile up generates its taxonomy from a sentence. Nothing here
+ * needs editing.
+ */
 export const NICHES = {
-  alt_fashion: {
-    label: 'Alternative fashion',
-    // Classification vocabulary — matched against page text to decide which
-    // outreach persona writes the email. Broad on purpose: unlike the
-    // discovery keywords, a term costs nothing here if it rarely matches.
+  business: {
+    label: 'Business',
     keywords: [
-      // alternative / dark
-      'emo', 'goth', 'gothic', 'nu goth', 'pastel goth', 'punk', 'grunge',
-      'metalcore', 'scene', 'alt fashion', 'alternative clothing',
-      'alternative fashion', 'subculture', 'occult', 'witchy',
-      // cute
-      'cutecore', 'cute', 'kawaii', 'pastel', 'coquette', 'fairycore',
-      'dollette', 'babycore', 'sanrio', 'plushie', 'bows', 'ribbon',
-      // Japanese-inspired
-      'harajuku', 'lolita', 'gothic lolita', 'sweet lolita', 'classic lolita',
-      'jirai kei', 'visual kei', 'fairy kei', 'mori kei', 'dolly kei',
-      'yami kawaii', 'menhera', 'gyaru', 'decora', 'shironuri', 'jfashion',
-      'japanese street', 'japanese inspired', 'tokyo', 'kimono', 'yukata',
-      // eras / other
-      'y2k', '90s', 'vintage', 'thrifted', 'deadstock', 'upcycled',
-      'reworked', 'streetwear', 'corset', 'platform boots', 'handmade clothing',
-    ],
-  },
-  craft_goods: {
-    label: 'Handmade & craft goods',
-    keywords: [
-      'handmade', 'ceramic', 'ceramics', 'pottery', 'jewelry', 'jewellery',
-      'stationery', 'enamel pin', 'sticker', 'zine', 'print shop',
-      'art object', 'woodwork', 'textile', 'weaving', 'candle', 'artisan',
-    ],
-  },
-  beauty_wellness: {
-    label: 'Beauty & skincare',
-    keywords: [
-      'skincare', 'skin care', 'serum', 'cleanser', 'moisturizer', 'beauty',
-      'cosmetics', 'fragrance', 'perfume', 'balm', 'apothecary', 'wellness',
-    ],
-  },
-  food_bev: {
-    label: 'Food & beverage',
-    keywords: [
-      'coffee', 'roaster', 'tea', 'chocolate', 'bakery', 'hot sauce',
-      'condiment', 'snack', 'granola', 'kombucha', 'brewery', 'distillery',
-      'small batch', 'provisions', 'pantry',
-    ],
-  },
-  artist_portfolio: {
-    label: 'Artist / creator portfolio',
-    keywords: [
-      'illustrator', 'illustration', 'painter', 'fine art', 'photographer',
-      'photography', 'portfolio', 'commissions', 'musician', 'band',
-      'tattoo artist', 'animator', 'sculptor', 'printmaker',
-    ],
-  },
-  creative_studio: {
-    label: 'Creative studio / agency',
-    keywords: [
-      'design studio', 'creative studio', 'branding agency', 'design agency',
-      'creative agency', 'art direction', 'production studio', 'film studio',
-      'photo studio', 'we help brands', 'our clients', 'case study',
-    ],
-  },
-  lifestyle_brand: {
-    label: 'Creative lifestyle brand',
-    keywords: [
-      'home goods', 'homeware', 'lifestyle', 'apparel', 'accessories',
-      'concept store', 'boutique', 'curated', 'slow living',
+      'shop', 'store', 'studio', 'services', 'products', 'about us', 'contact us',
+      'our team', 'book', 'booking', 'appointment', 'quote', 'pricing', 'clients',
+      'customers', 'gallery', 'portfolio', 'testimonials', 'hours', 'location',
     ],
   },
 };
 
-export const DEFAULT_NICHE = 'lifestyle_brand';
+export const DEFAULT_NICHE = 'business';
 
 // ---------------------------------------------------------------------------
 // Scoring weights. Must total 100.

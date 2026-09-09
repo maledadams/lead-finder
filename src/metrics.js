@@ -1,6 +1,6 @@
 // What the numbers say.
 //
-// Chosen to answer questions that change what Lucía does next, not to fill a
+// Chosen to answer questions that change what you do next, not to fill a
 // page: is the outreach landing, is the list clean, does the score actually
 // predict a reply, and which niches are worth the crawl budget. A metric that
 // cannot change a decision is not here.

@@ -11,32 +11,30 @@ import { AI_MODEL, NEURONS_PER_EVAL, NICHES } from './config.js';
 import { newId, nowIso } from './entity.js';
 import { activeLessons, lessonsToPrompt } from './learning.js';
 
-const SYSTEM = `You are helping Lucia, a freelance web developer and designer, decide who is worth contacting.
+/**
+ * The fallback scoring brief, used only until a profile writes its own.
+ *
+ * Deliberately says almost nothing about who is a good lead, because that is
+ * the single most personal thing in the system — it is the difference between
+ * wanting independent makers and wanting dental clinics. Setting a profile up
+ * generates a real brief from a sentence, and it is stored in the database.
+ */
+const SYSTEM = `You are helping a freelance web developer decide which businesses are worth contacting.
 
-Lucia builds websites and custom business systems for founder-led creative businesses in the United States. Her work is expressive, artistic, and built around the personality of the brand. She is not a generic agency and does not want generic corporate clients.
+They build websites and custom business systems for independent businesses. Judge each business on whether there is real work to be done for it, and whether it could plausibly pay for that work.
 
-She has TWO separate service lines, and you must evaluate them independently:
-  A. WEBSITE / DIGITAL EXPERIENCE — the site is bad, dated, generic, or fails the brand.
-  B. SYSTEM / AUTOMATION — the business has operational friction software could fix.
-A business with an excellent website can still be a strong lead if there is a real system opportunity. Only reject when BOTH are absent.
+Evaluate TWO service lines independently:
+  A. WEBSITE — the site is dated, generic, hard to use, or fails the business.
+  B. SYSTEM — the business has operational friction that software would remove.
+A business with a good website can still be a strong lead if there is a real system opportunity. Reject only when BOTH are absent.
 
-She needs clients who can plausibly spend $1,000-$2,000+. A business that cannot afford that is a bad lead no matter how bad its website is.
+NICHE: pick the category the BUSINESS is in, never one describing its website.
 
-The question that matters most: "If Lucia looked at this business, would she be genuinely excited to make something for them?"
-
-THE COMPLIMENT — "liked_thing" — is the hardest part and most models get it wrong:
-- Name a CONCRETE THING. A specific product, collection, material, technique, colourway, or a detail of how they photograph or describe their work.
-- GOOD: "the ash-glazed vase collection", "the way every piece is shot against raw linen", "that you name each mug after a customer"
-- BAD, and rejected automatically: "aesthetic personality and unique products", "unique brand personality and values", "strong brand identity", "beautiful products". These are attribute lists. They are true of every brand and read as machine output.
-- If the page does not give you a concrete thing to name, leave liked_thing empty. An empty field is fine. A generic one is not - it means no email gets sent at all.
-
-NICHE: pick the one the BUSINESS is in, not the one describing its website quality. A ceramics studio is craft_goods. A skincare brand is beauty_wellness. Only use creative_studio for a business whose clients are other businesses - an agency or design studio.
-
-EVIDENCE RULES — these are absolute:
-- Only state things you can see in the provided page data.
-- Never invent a compliment. Never invent a flaw. Never mention speed, mobile behaviour, or a collection unless the data shows it.
-- If you cannot find something specific and real to admire, say so by scoring creative low. Do not fabricate.
-- Quote or closely paraphrase the actual page text in "liked_evidence".
+EVIDENCE RULES, absolute:
+- State only what the provided page data shows.
+- Never invent a compliment or a flaw. Never mention speed, mobile behaviour or a product the data does not show.
+- If there is nothing specific and real to point at, score low rather than fabricating.
+- Quote or closely paraphrase the actual page text in any evidence field.
 
 Respond with JSON only.`;
 
@@ -48,7 +46,7 @@ const SCHEMA = {
     creative_score: { type: 'integer' },
     need_score: { type: 'integer' },
     conversion_score: { type: 'integer' },
-    would_lucia_want: { type: 'boolean' },
+    worth_contacting: { type: 'boolean' },
     veto_reason: { type: 'string' },
     aesthetic_note: { type: 'string' },
     website_opportunity: { type: 'string' },
@@ -60,7 +58,7 @@ const SCHEMA = {
   },
   required: [
     'niche', 'fit_score', 'creative_score', 'need_score', 'conversion_score',
-    'would_lucia_want', 'liked_thing', 'opportunity_headline', 'summary',
+    'worth_contacting', 'liked_thing', 'opportunity_headline', 'summary',
   ],
 };
 
@@ -100,7 +98,7 @@ Score each 0-100:
 - need_score: strength of the BEST opportunity, website OR system
 - conversion_score: realistic chance they become a paying client
 
-Set would_lucia_want to false only if there is genuinely no meaningful opportunity in either service line, or the business clearly cannot afford $1,000+.`;
+Set worth_contacting to false only if there is genuinely no meaningful opportunity in either service line, or the business clearly cannot afford $1,000+.`;
 }
 
 /**
@@ -133,7 +131,7 @@ You have very little to go on, so be careful:
   seen them. You have a name, a category and an address.
 - liked_thing must be left EMPTY unless the self-description above gives you
   something real. A name alone is not enough. An empty field is correct here
-  and simply means Lucia will write the first line herself.
+  and simply means the sender writes the first line themselves.
 - Judge fit and creative from the category and name only, and score
   conservatively when unsure.
 - Judge money from the physical premises signals: a shop with a street
@@ -299,7 +297,10 @@ function sanitize(p, signals, niches = NICHES) {
     creative_score: int(p.creative_score),
     need_score: int(p.need_score),
     conversion_score: int(p.conversion_score),
-    would_lucia_want: typeof p.would_lucia_want === 'boolean' ? p.would_lucia_want : true,
+    // Read under either name. Evaluations cached before this field was renamed
+    // still carry the old one, and losing it would quietly un-veto them.
+    worth_contacting: typeof (p.worth_contacting ?? p.would_lucia_want) === 'boolean'
+      ? (p.worth_contacting ?? p.would_lucia_want) : true,
     veto_reason: str(p.veto_reason, 200),
     aesthetic_note: str(p.aesthetic_note, 300),
     website_opportunity: str(p.website_opportunity, 400),

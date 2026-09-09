@@ -319,7 +319,7 @@ async function maintainVocabulary(env, db, budget, outOfTime = () => false, prof
     .bind(profileId).first();
 
   if ((have?.n || 0) === 0) {
-    const h = await harvestWikipedia(db, profileId, env.USER_AGENT);
+    const h = await harvestWikipedia(db, profileId, env.USER_AGENT, profile);
     out.harvested = h.added;
     if (h.errors.length) out.harvest_errors = h.errors.slice(0, 3);
   }

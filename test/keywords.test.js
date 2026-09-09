@@ -29,25 +29,23 @@ test('terms too generic to identify a brand are rejected', () => {
   }
 });
 
-test('harvest sources cover the niches that need vocabulary most', () => {
-  const niches = new Set(WIKI_SOURCES.map((s) => s.niche));
-  assert.ok(niches.has('alt_fashion'), 'alt fashion is the deepest vocabulary');
-  assert.ok(WIKI_SOURCES.filter((s) => s.niche === 'alt_fashion').length >= 5);
-  for (const s of WIKI_SOURCES) {
-    assert.ok(['links', 'category'].includes(s.kind));
-    assert.ok(Object.keys(NICHES).includes(s.niche), `${s.niche} must be a real niche`);
-  }
+test('the shipped Wikipedia sources are empty, and a profile brings its own', async () => {
+  const { wikiSourcesFor } = await import('../src/keywords.js');
+  // Which list pages are worth mining depends entirely on what you sell, so
+  // shipping a list would mean shipping somebody else's vocabulary.
+  assert.deepEqual(WIKI_SOURCES, []);
+
+  const own = [{ kind: 'category', title: 'Dentistry', niche: 'clinics' }];
+  assert.deepEqual(wikiSourcesFor({ discovery: { wiki_sources: own } }), own);
+  assert.deepEqual(wikiSourcesFor(null), [], 'and with none, harvesting is simply skipped');
 });
 
-test('the alt-fashion classifier covers every style Lucia named', () => {
-  const kw = NICHES.alt_fashion.keywords;
-  for (const must of [
-    'emo', 'goth', 'cutecore', 'cute', 'kawaii', 'harajuku', 'lolita', 'y2k',
-    'gyaru', 'decora', 'visual kei', 'fairy kei', 'jirai kei', 'menhera',
-    'japanese street', 'sanrio',
-  ]) {
-    assert.ok(kw.includes(must), `alt_fashion classifier is missing "${must}"`);
-  }
+test('the built-in taxonomy is one neutral category, not a point of view', () => {
+  // These used to be seven categories of one person's clients, which every
+  // clone of this repository inherited. Real categories are generated per
+  // profile from a sentence and stored in the database.
+  assert.deepEqual(Object.keys(NICHES), ['business']);
+  assert.ok(NICHES.business.keywords.length > 5, 'still enough to classify anything at all');
 });
 
 test('person names harvested from citations are rejected', () => {

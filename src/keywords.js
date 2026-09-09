@@ -9,7 +9,7 @@
 // So the list is harvested and then measured:
 //
 //   1. HARVEST   Wikipedia enumerates fashion subcultures and aesthetics in
-//                exactly the categories Lucia cares about. Free, keyless, and
+//                exactly the categories a profile cares about. Free, keyless, and
 //                the API is meant to be queried.
 //   2. MINE      Terms that actually appear on businesses we already scored
 //                well. This is the self-improving half — the corpus teaches
@@ -27,42 +27,21 @@ const WIKI_API = 'https://en.wikipedia.org/w/api.php';
 const WIKI_TIMEOUT_MS = 20_000;
 
 /**
- * Wikipedia pages and categories worth harvesting, mapped to the niche their
- * vocabulary belongs to. Chosen because each one *enumerates* named styles
- * rather than discussing them.
+ * Wikipedia pages to mine vocabulary from — a profile's own, not the code's.
+ *
+ * Which list pages are worth reading depends entirely on what you are looking
+ * for; "Japanese street fashion" builds a good vocabulary for one operation and
+ * none at all for another. So the shipped list is empty, and a profile supplies
+ * its own in discovery.wiki_sources. With none, harvesting is skipped and
+ * discovery runs on the profile's search terms alone.
  */
-// Categories, overwhelmingly — a first harvest showed why.
-//
-// `category` members are the styles and garments themselves: Punk fashion
-// returned bondagepants, bovverboot, devilock, combatboot, bumflap, poetshirt.
-// Those are close to perfect discovery keywords: a shop selling them is
-// exactly the target, and no corporation puts "bondagepants" in a domain.
-//
-// `links` from an article body return its citations and tangents instead.
-// "Lolita fashion" gave lightnovel, lewiscarroll, sumireuesaka; "List of
-// subcultures" gave 354 terms that were mostly cultural-studies vocabulary
-// and author names. Both are dropped.
-export const WIKI_SOURCES = [
-  // alternative / dark
-  { kind: 'category', title: 'Fashion aesthetics', niche: 'alt_fashion' },
-  { kind: 'category', title: 'Punk fashion', niche: 'alt_fashion' },
-  { kind: 'category', title: 'Gothic fashion', niche: 'alt_fashion' },
-  { kind: 'category', title: 'Subcultures by type', niche: 'alt_fashion' },
-  // Japanese
-  { kind: 'category', title: 'Japanese street fashion', niche: 'alt_fashion' },
-  { kind: 'category', title: 'Japanese fashion', niche: 'alt_fashion' },
-  { kind: 'links', title: 'Japanese street fashion', niche: 'alt_fashion' },
-  // garments and dress vocabulary, which travels well into brand domains
-  { kind: 'category', title: 'Dresses', niche: 'alt_fashion' },
-  { kind: 'category', title: 'Skirts', niche: 'alt_fashion' },
-  { kind: 'category', title: 'Boots', niche: 'alt_fashion' },
-  // making
-  { kind: 'category', title: 'Studio pottery', niche: 'craft_goods' },
-  { kind: 'category', title: 'Handicrafts', niche: 'craft_goods' },
-  { kind: 'category', title: 'Jewellery', niche: 'craft_goods' },
-  { kind: 'category', title: 'Printmaking', niche: 'artist_portfolio' },
-  { kind: 'category', title: 'Cosmetics', niche: 'beauty_wellness' },
-];
+export const WIKI_SOURCES = [];
+
+/** This profile's sources, falling back to none rather than to someone else's. */
+export function wikiSourcesFor(profile) {
+  const own = profile?.discovery?.wiki_sources;
+  return Array.isArray(own) && own.length ? own : WIKI_SOURCES;
+}
 
 /**
  * Terms that are about fashion but useless as domain keywords: events,
@@ -431,11 +410,11 @@ export async function recordUse(db, profileId, keyword, leadsFound) {
 }
 
 /** Harvest every configured Wikipedia source. */
-export async function harvestWikipedia(db, profileId, userAgent) {
+export async function harvestWikipedia(db, profileId, userAgent, profile = null) {
   if (!profileId) throw new Error('harvestWikipedia needs a profileId');
   const out = { sources: 0, terms: 0, added: 0, errors: [] };
 
-  for (const source of WIKI_SOURCES) {
+  for (const source of wikiSourcesFor(profile)) {
     const { terms, error } = await harvestOne(source, userAgent);
     out.sources++;
     if (error) { out.errors.push(`${source.title}: ${error}`); continue; }

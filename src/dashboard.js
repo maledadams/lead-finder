@@ -3,7 +3,7 @@
 // This is not a stats page. One person opens it each morning, works down a
 // list, and for each business decides: send this, or don't — and says why.
 // That "why" is the most valuable output of the whole system, because it is
-// what teaches the scoring which businesses Lucia actually wants.
+// what teaches the scoring which businesses this operation actually wants.
 //
 // Design rules that follow from that:
 //   - No internal vocabulary. No "entity", "frontier", "prescore", "state".
@@ -23,6 +23,92 @@ import { renderMetrics } from './metrics.js';
 import { bookingUrl } from './outreach.js';
 import { confirmDialog, esc, icon, settingsDialog } from './ui.js';
 import { docEditor, docPage, docsIndex, docsRail, folderPage } from './docsview.js';
+
+/**
+ * What a brand-new install sees.
+ *
+ * A database with no profile is not an error, it is the first run. Rather than
+ * shipping somebody else's categories and copy in the schema, the system starts
+ * empty and asks one question — everything else is written from the answer.
+ *
+ * Deliberately its own page rather than a panel in Settings: there is nothing
+ * else to look at yet, and hiding the only thing you can do behind a menu is a
+ * poor way to greet anyone.
+ */
+export function setupPage(env, nonce) {
+  const missing = ['SENDER_NAME', 'SENDER_EMAIL', 'SENDER_POSTAL_ADDRESS']
+    .filter((k) => !env?.[k]);
+
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Set up — leads</title>
+<style>
+  :root{--bg:#FFFFFF;--fg:#11181C;--c-2:#f4f4f5;--line:#e4e4e7;--muted:#52525b;
+        --accent:#006FEE;--accent-ink:#fff;--warn:#936316;--r:12px}
+  @media (prefers-color-scheme:dark){:root{--bg:#000;--fg:#ECEDEE;--c-2:#18181b;
+        --line:#27272a;--muted:#a1a1aa}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:15px/1.65 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  main{max-width:44rem;margin:12vh auto;padding:0 1.4rem}
+  h1{font-size:24px;letter-spacing:-.02em;margin:0 0 6px}
+  p{color:var(--muted);max-width:60ch}
+  label{display:block;font-size:13px;color:var(--muted);margin:18px 0 5px}
+  input,textarea{width:100%;font:inherit;font-size:15px;padding:11px 13px;border-radius:var(--r);
+       border:1px solid var(--line);background:var(--c-2);color:var(--fg);resize:vertical}
+  button{font:inherit;font-size:15px;font-weight:600;padding:11px 20px;border-radius:var(--r);
+       border:0;background:var(--accent);color:var(--accent-ink);cursor:pointer;margin-top:18px}
+  button:disabled{opacity:.5}
+  .warn{border:1px solid color-mix(in srgb,var(--warn) 40%,var(--line));
+        background:color-mix(in srgb,var(--warn) 8%,transparent);
+        border-radius:var(--r);padding:12px 15px;margin:20px 0;font-size:13.5px}
+  code{background:var(--c-2);padding:1px 6px;border-radius:5px;font-size:13px}
+  .out{margin-top:20px;font-size:14px}
+</style></head><body><main>
+  <h1>Set up your first profile</h1>
+  <p>This install has no profile yet, so it has no categories, no email copy and
+     no scoring brief. Describe who you want to reach and all three are written
+     from that — you do not configure them by hand, and nothing here came from
+     anybody else.</p>
+
+  ${missing.length ? `<div class="warn"><b>Set these first, or drafts cannot be sent:</b><br>
+    ${missing.map((k) => `<code>${k}</code>`).join(' ')}<br>
+    They live in <code>wrangler.toml</code> and the postal address is required by
+    CAN-SPAM in every email you send.</div>` : ''}
+
+  <label for="name">What should this profile be called?</label>
+  <input id="name" type="text" maxlength="80" placeholder="Independent makers" autofocus>
+
+  <label for="brief">Who do you want to reach?</label>
+  <textarea id="brief" rows="5" placeholder="Two or three sentences. The kind of business, roughly what size, where they are, and anything that would rule one out."></textarea>
+
+  <button id="go">Create it</button>
+  <div class="out" id="out"></div>
+</main>
+<script nonce="${esc(nonce)}">
+const out = document.getElementById('out');
+const go = document.getElementById('go');
+go.addEventListener('click', async () => {
+  const name = document.getElementById('name').value;
+  const brief = document.getElementById('brief').value;
+  if (brief.trim().length < 40) { out.textContent = 'Say a little more about who you want to reach.'; return; }
+  go.disabled = true; out.textContent = 'Writing the categories, the copy and the scoring brief…';
+  try {
+    const r = await fetch('/api/setup', {
+      method: 'POST', headers: {'content-type':'application/json'},
+      credentials: 'same-origin', body: JSON.stringify({name, brief}),
+    });
+    const d = await r.json();
+    if (!r.ok || d.ok === false) throw new Error(d.error || 'setup failed');
+    out.textContent = 'Done — ' + (d.niches || []).length + ' categories and ' +
+      d.seed_keywords + ' search terms. Opening the dashboard…';
+    setTimeout(() => location.assign('/'), 1400);
+  } catch (e) { go.disabled = false; out.textContent = e.message; }
+});
+</script></body></html>`;
+}
 
 // Twenty a page, everywhere that lists entries. Also the cheapest single
 // optimisation here: a history page reads 60% fewer rows than it did at fifty.

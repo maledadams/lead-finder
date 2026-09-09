@@ -283,7 +283,7 @@ CREATE INDEX IF NOT EXISTS idx_keywords_niche  ON keywords(profile_id, niche);
 --
 -- Added by migration 002, repeated here so db:init produces a database the
 -- dashboard can actually query. The reason text is the most valuable output of
--- the whole system: it is what teaches the scoring what Lucia actually wants,
+-- the whole system: it is what teaches the scoring what you actually want,
 -- and it is where a skip reason lives, since the outreach row does not hold one.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS feedback (
@@ -404,17 +404,16 @@ CREATE INDEX IF NOT EXISTS idx_outreach_profile ON outreach(profile_id, queue_da
 CREATE INDEX IF NOT EXISTS idx_feedback_profile ON feedback(profile_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_lessons_profile  ON lessons(profile_id, active, weight DESC);
 
--- The first profile, so a fresh install has somewhere to put its leads.
+-- NO PROFILE IS SEEDED, on purpose.
 --
--- Every query in the system is scoped by profile and refuses to run without
--- one, so a database with no profile row is a database where nothing works. Its
--- configuration is deliberately NULL: unset falls back to the built-in creative
--- defaults in config.js, which is what lets the original operation carry on
--- with no stored config at all.
-INSERT OR IGNORE INTO profiles (id, slug, name, active, is_default, brief, created_at, updated_at)
-VALUES ('p-creative', 'creative', 'Creative businesses', 1, 1,
-        'Founder-led creative businesses in the United States: makers, studios, independent labels and small brands with an identity of their own.',
-        '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+-- A profile carries the taxonomy, the sales copy, the scoring brief and the
+-- search terms — the things that belong to whoever is running this. Shipping one
+-- would mean every install inherited somebody else's, and had to edit source
+-- files to get rid of them.
+--
+-- A database with no profile is the signal for first-run setup: the dashboard
+-- shows a setup screen instead of a queue, and one sentence about who you want
+-- to reach generates the rest.
 
 -- ---------------------------------------------------------------------------
 -- skip_categories — your buckets for why a lead was passed on (migration 011)

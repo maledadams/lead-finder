@@ -1,7 +1,7 @@
 // The feedback loop.
 //
 // Every time a reviewer skips a lead and says why, that reason is a better
-// signal than anything hard-coded here: it is Lucia's actual taste, stated in
+// signal than anything hard-coded here: it is the reviewer's actual taste, stated in
 // words, about a specific real business.
 //
 // How it is used, and deliberately not used:
@@ -96,7 +96,7 @@ export async function deriveLessons(env, db, profileId, { minBatch = 3, limit = 
     `\n   reviewer said: ${r.reason}`
   ).join('\n');
 
-  const prompt = `A reviewer has been going through prospect leads for Lucia, a freelance web designer who works with founder-led creative businesses. Here are their recent decisions and the reasons they gave.
+  const prompt = `A reviewer has been going through prospect leads for a freelance web developer. Here are their recent decisions and the reasons they gave.
 
 ${listing}
 
@@ -218,7 +218,7 @@ export function lessonsToPrompt(lessons) {
   const avoid = lessons.filter((l) => l.kind === 'AVOID').map((l) => `- ${l.lesson}`);
   const prefer = lessons.filter((l) => l.kind === 'PREFER').map((l) => `- ${l.lesson}`);
 
-  let out = '\n\nWHAT LUCIA\'S TEAM HAS LEARNED SO FAR (from real decisions on real leads — these outrank your own judgement):\n';
+  let out = '\n\nWHAT HAS BEEN LEARNED SO FAR (from real decisions on real leads — these outrank your own judgement):\n';
   if (prefer.length) out += `\nScore UP:\n${prefer.join('\n')}\n`;
   if (avoid.length) out += `\nScore DOWN:\n${avoid.join('\n')}\n`;
   return out;

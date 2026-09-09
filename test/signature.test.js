@@ -4,11 +4,11 @@ import { htmlToText, splitFooter, buildHtmlBody, buildTextBody } from '../src/zo
 import { composeDraft } from '../src/outreach.js';
 import { setResponseStatus, sweepGhosted, RESPONSE_STATUSES } from '../src/queue.js';
 
-const env = { SENDER_POSTAL_ADDRESS: '12 Bell Row, Bristol BS1 4TY', SENDER_NAME: 'Lucía Adams' };
+const env = { SENDER_POSTAL_ADDRESS: '12 Bell Row, Bristol BS1 4TY', SENDER_NAME: 'Rowan Vale' };
 
-const FIRMA = `<div><b>Lucía Adams</b><br>Designer &amp; developer<br>
-<a href="https://maledadams.work">maledadams.work</a><br>
-<a href="mailto:hi@maledadams.work">hi@maledadams.work</a></div>`;
+const FIRMA = `<div><b>Rowan Vale</b><br>Designer &amp; developer<br>
+<a href="https://rowanvale.studio">rowanvale.studio</a><br>
+<a href="mailto:hi@rowanvale.studio">hi@rowanvale.studio</a></div>`;
 
 // ---------------------------------------------------------------------------
 // The firma, flattened
@@ -16,10 +16,10 @@ const FIRMA = `<div><b>Lucía Adams</b><br>Designer &amp; developer<br>
 
 test('htmlToText keeps the link target when the label is not the url', () => {
   const out = htmlToText(FIRMA);
-  assert.match(out, /Lucía Adams/);
+  assert.match(out, /Rowan Vale/);
   assert.match(out, /Designer & developer/);
   // A bare domain label already contains its url, so it is not duplicated.
-  assert.match(out, /maledadams\.work/);
+  assert.match(out, /rowanvale\.studio/);
   assert.doesNotMatch(out, /</, 'no tags may survive');
   assert.doesNotMatch(out, /&amp;|&nbsp;/, 'entities must be decoded');
 });
@@ -54,7 +54,7 @@ test('splitFooter separates the message from the legal footer', () => {
   assert.match(footer, /12 Bell Row/);
   assert.doesNotMatch(message, /I will not write again/);
   // The sign-off the user asked for sits at the end of the message, above the footer.
-  assert.match(message, /Best,\nLucía Adams$/);
+  assert.match(message, /Best,\nRowan Vale$/);
 });
 
 test('splitFooter tolerates a body with no footer at all', () => {
@@ -79,7 +79,7 @@ test('buildHtmlBody escapes the draft but keeps the firma as authored', () => {
   const html = buildHtmlBody('Hi <script>x</script>\n\nIf this is not relevant, reply.\n12 Bell Row', FIRMA);
   assert.match(html, /&lt;script&gt;/, 'the draft must be escaped');
   assert.doesNotMatch(html, /<script>/, 'no raw script from the draft');
-  assert.match(html, /<b>Lucía Adams<\/b>/, 'the firma keeps its markup');
+  assert.match(html, /<b>Rowan Vale<\/b>/, 'the firma keeps its markup');
   assert.match(html, /<br>/, 'line breaks survive as <br>');
   assert.match(html, /border-top/, 'the footer is set apart');
 });
@@ -91,7 +91,7 @@ test('buildHtmlBody still produces a whole message with no signature', () => {
 });
 
 test('buildTextBody puts the flattened firma above the footer', () => {
-  const body = 'Hello,\n\nSome text.\n\nBest,\nLucía Adams\n\nIf this is not relevant, reply.\n12 Bell Row';
+  const body = 'Hello,\n\nSome text.\n\nBest,\nRowan Vale\n\nIf this is not relevant, reply.\n12 Bell Row';
   const out = buildTextBody(body, FIRMA);
   const firmaAt = out.indexOf('Designer & developer');
   const footerAt = out.indexOf('If this is not relevant');

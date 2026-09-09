@@ -16,55 +16,22 @@
  * the credibility line, and the only per-niche text left in an email now that
  * the drafts open on it directly.
  */
-const PERSONAS = {
-  alt_fashion: {
-    label: 'Alternative fashion',
+/**
+ * The fallback voice, used only until a profile defines its own.
+ *
+ * One neutral persona rather than a set of written-out sales pitches. The real
+ * copy — what you build, who for, and what you are offering to look at — is
+ * generated per profile from a sentence and stored in the database, because it
+ * is the part that belongs to whoever is sending rather than to the code.
+ *
+ * Nobody should have to edit this file to stop sounding like someone else.
+ */
+export const PERSONAS = {
+  business: {
+    label: 'Business',
     subject: (n) => `${n} — a few notes on your site`,
-    context: 'I design and build websites for independent fashion labels — the kind where the site needs to carry as much personality as the clothes do.',
-    offer: 'a short written breakdown of what I would change on the shop pages, with a rough visual of how it could look',
-    sign: 'Lucía Adams',
-  },
-  craft_goods: {
-    label: 'Handmade & craft',
-    subject: (n) => `${n} — a few notes on your shop pages`,
-    context: 'I design and build websites for independent makers and studios, so the site does justice to work that is made by hand.',
-    offer: 'a short written breakdown of what I would change, with a rough visual of how the shop could feel closer to the objects themselves',
-    sign: 'Lucía Adams',
-  },
-  beauty_wellness: {
-    label: 'Beauty & skincare',
-    subject: (n) => `${n} — notes on your product pages`,
-    context: 'I design and build websites for independent beauty and skincare brands, where most of the decision happens on the product page.',
-    offer: 'a short written breakdown of what I would change on the product pages, and why',
-    sign: 'Lucía Adams',
-  },
-  food_bev: {
-    label: 'Food & beverage',
-    subject: (n) => `${n} — a thought on your ordering flow`,
-    context: 'I design and build websites and ordering systems for small food and drink brands.',
-    offer: 'a short teardown of the ordering flow with the specific changes I would make',
-    sign: 'Lucía Adams',
-  },
-  artist_portfolio: {
-    label: 'Artist portfolio',
-    subject: () => `Your work and where it lives`,
-    context: 'I design and build portfolio sites for artists and illustrators — properly built, not a template with your images dropped in.',
-    offer: 'a rough layout for what a real portfolio site could look like for your work',
-    sign: 'Lucía Adams',
-  },
-  creative_studio: {
-    label: 'Creative studio',
-    subject: (n) => `${n} — a note on your own site`,
-    context: 'I build websites and internal tools for creative studios — usually the work that gets postponed because client projects come first.',
-    offer: 'a short written assessment of your site and the workflow around it, with what I would prioritise',
-    sign: 'Lucía Adams',
-  },
-  lifestyle_brand: {
-    label: 'Creative lifestyle brand',
-    subject: (n) => `${n} — a few notes on your site`,
-    context: 'I design and build websites for independent brands with a clear identity of their own.',
-    offer: 'a short written breakdown of what I would change, with a rough visual of where it could go',
-    sign: 'Lucía Adams',
+    context: 'I design and build websites and internal systems for independent businesses.',
+    offer: 'a short written breakdown of what I would change, and why',
   },
 };
 
@@ -80,7 +47,7 @@ const PERSONAS = {
 function personaFor(entity, profile) {
   const set = profile?.personas && Object.keys(profile.personas).length
     ? profile.personas : PERSONAS;
-  return set[entity.niche] || set[Object.keys(set)[0]] || PERSONAS.lifestyle_brand;
+  return set[entity.niche] || set[Object.keys(set)[0]] || PERSONAS.business;
 }
 
 function subjectFor(persona, name) {
@@ -211,7 +178,7 @@ export function composeDraft(entity, env, profile = null) {
     subject: stripControl(subjectFor(persona, name)).slice(0, 200),
     body,
     cta: persona.offer || null,
-    persona: entity.niche || 'lifestyle_brand',
+    persona: entity.niche || 'business',
   };
 }
 
@@ -261,7 +228,7 @@ function composeNoWebsiteDraft(entity, env, persona) {
     subject: stripControl(`${name} — a question about your website`).slice(0, 200),
     body,
     cta: 'offer a free rough visual before any commitment',
-    persona: `${entity.niche || 'lifestyle_brand'}:no_website`,
+    persona: `${entity.niche || 'business'}:no_website`,
   };
 }
 
@@ -270,7 +237,7 @@ function composeNoWebsiteDraft(entity, env, persona) {
  *
  * The persona's own sign-off is a stylistic fallback for when no sender name
  * is configured. Once SENDER_NAME is set it wins outright, otherwise drafts
- * end with "— lucia" immediately followed by "Lucía Adams".
+ * end with a sign-off immediately followed by the same name again.
  */
 /**
  * The sign-off that goes above the CAN-SPAM footer.
@@ -625,4 +592,3 @@ function safeJson(s) {
   try { return JSON.parse(s); } catch { return null; }
 }
 
-export { PERSONAS };

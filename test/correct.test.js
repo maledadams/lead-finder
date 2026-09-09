@@ -10,7 +10,13 @@ const SCHEMA = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 function harness(modelReply) {
   const raw = new DatabaseSync(':memory:');
   raw.exec(SCHEMA);
+  // A profile brings its own categories now, so the fixture states them rather
+  // than relying on a taxonomy that used to be baked into the code.
   raw.exec(`
+    INSERT INTO profiles (id,slug,name,active,is_default,created_at,updated_at)
+      VALUES ('p-creative','creative','Creative',1,1,'2026-01-01','2026-01-01');
+    UPDATE profiles SET niches = '{"beauty_wellness":{"label":"Beauty"},"food_bev":{"label":"Food"}}'
+      WHERE id = 'p-creative';
     INSERT INTO entities (id, profile_id, display_name, domain, website, niche, contact_email, score, score_reason, state, first_seen_at, updated_at, last_evaluated_at)
       VALUES ('e1','p-creative','Glasshaus Gardens','fettlebotanic.com','https://fettlebotanic.com',
               'beauty_wellness','hello@fettlebotanic.com',63,'model rationale','EVALUATED',

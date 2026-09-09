@@ -36,7 +36,7 @@ that gets better at picking leads the more you tell it why you skipped one.
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
 - [Profiles: several outreach operations, one deployment](#profiles-several-outreach-operations-one-deployment)
-- [Making it yours](#making-it-yours-the-part-that-is-not-configuration)
+- [Making it yours](#making-it-yours)
 - [The review dashboard](#the-review-dashboard)
 - [The calendar](#the-calendar)
 - [Settings](#settings)
@@ -133,13 +133,13 @@ the second run over the same corpus is nearly free.
 
 ## Quick start
 
-**Prerequisites:** a Cloudflare account, Node 18+, and a domain on Cloudflare if
-you want the dashboard protected properly (strongly recommended).
+Nothing in this repository is configured for anybody in particular. There are no
+categories, no email copy and no scoring brief in the code — those are written
+for **your** business on first run, from one sentence describing who you want to
+reach, and they live in your database.
 
 ```bash
-git clone <your-fork-url> lead-finder
-cd lead-finder
-npm install
+git clone https://github.com/YOUR-NAME/lead-finder && cd lead-finder && npm install
 
 # 1. Create the database, then paste the printed id into wrangler.toml
 npx wrangler d1 create lead-finder
@@ -151,22 +151,34 @@ npm run db:init
 # 3. Secrets. None of these belong in a file you commit.
 npx wrangler secret put DASHBOARD_KEY          # any long random string
 npx wrangler secret put SESSION_SECRET         # any long random string
-npx wrangler secret put ALLOWED_EMAILS         # who may sign in, comma-separated
-npx wrangler secret put SENDER_NAME
-npx wrangler secret put SENDER_EMAIL
-npx wrangler secret put SENDER_POSTAL_ADDRESS  # a real address — legally required
-npx wrangler secret put CF_ACCOUNT_ID          # for browser rendering
+npx wrangler secret put ZOHO_CLIENT_SECRET     # from your Zoho API console
+npx wrangler secret put CAL_BOOKING_URL        # optional: your booking link
+npx wrangler secret put CAL_API_KEY            # optional: shows bookings in the dashboard
 
-# 4. Edit wrangler.toml: set your route pattern and your USER_AGENT.
+# 4. Edit wrangler.toml — the header lists exactly which lines to change.
+#    SENDER_NAME, SENDER_EMAIL and SENDER_POSTAL_ADDRESS are required:
+#    the postal address is not optional, CAN-SPAM requires it in every email.
 
-# 5. Deploy
-npm run deploy
+# 5. Deploy, then open your dashboard.
+npx wrangler deploy
 ```
 
-**Then put Cloudflare Access in front of the route.** The shipped config sets
-`REQUIRE_ACCESS = "true"`, which makes the Worker refuse any request that did
-not come through Access. See [Security model](#security-model) for why this
-matters more than it looks.
+### First run
+
+Opening the dashboard with an empty database shows a setup screen rather than a
+queue, because a database with no profile is a fresh install rather than a fault.
+It asks two things — what to call the profile, and who you want to reach:
+
+> Independent dental and orthodontic practices in the United States. Established
+> practices with several staff and their own building, not sole traders, and not
+> anything owned by a dental group.
+
+From that, a model writes the categories, the classification vocabulary, the
+scoring brief, the email copy, the search terms and the OpenStreetMap tags — and
+every part of it is validated before the profile exists, because a profile with
+an invented map tag would fail silently at crawl time days later.
+
+Then it crawls. There is nothing else to configure and no file to edit.
 
 ### Local development
 
@@ -291,29 +303,28 @@ Both profiles search everywhere. Their map tags barely overlap — a dental clin
 is never a pottery studio — so they compete for map squares rather than for
 businesses, and coverage is worth more than the few duplicate queries it costs.
 
-## Making it yours: the part that is not configuration
+## Making it yours
 
-Most of what used to be a code change is now a profile — see above. The
-built-in creative profile is what a deployment with no profile configuration
-falls back to, and these are the files that define it.
+There is no longer a list of files to edit. Everything that makes this system
+*yours* is a row in your own database, written at setup or changed in Settings:
 
-| File | What it defines |
+| What | Where it lives |
 |---|---|
-| `src/config.js` → `NICHES` | The fallback taxonomy of business types |
-| `src/outreach.js` → `PERSONAS` | The fallback sales copy per category |
-| `src/outreach.js` → `PLAIN_ENGLISH` | How a technical finding is said to a non-technical reader |
-| `src/outreach.js` → `BENEFIT` | The same finding said as the upside it implies |
-| `src/outreach.js` → `FIX` | What fixing each kind of problem actually involves |
-| `src/ai.js` → `SYSTEM` | The fallback scoring brief |
-| `src/score.js` | Deterministic weights and hard vetoes — shared by every profile |
-| `src/metros.js` | The fallback geography — all fifty states, grouped by state. Adding to it is a Settings job, not a code one |
+| Categories and their vocabulary | `profiles.niches` — generated from your brief |
+| The email copy per category | `profiles.personas` — generated, editable |
+| The scoring brief the model judges against | `profiles.ai_system` |
+| Search terms and Wikipedia sources | `profiles.seed_keywords`, `profiles.discovery` |
+| Which OpenStreetMap tags to look for | `profiles.niches[*].osm` |
+| Where to crawl | the `regions` table, via Settings |
+| Why you skip things | the `skip_categories` table, via Settings |
 
-The three sentences every email carries whatever the profile — what you build,
-how you build it, and the booking link — live in `src/outreach.js` as
-`BUILD_APPROACH` and `closing()`.
+The code ships one neutral fallback of each, used only until a profile exists.
+`examples/profile-medium-businesses.sql` shows what a real one looks like once
+it has been generated.
 
-Everything else — the crawl budget, the dedup index, the queue, the dashboard,
-the metrics, the send path, bounce handling — works unchanged.
+What is *not* configurable, on purpose: the deterministic scoring weights and
+hard filters in `src/score.js`, which are about whether a website is any good
+rather than about who you want to sell to.
 
 ## The review dashboard
 

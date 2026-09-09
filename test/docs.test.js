@@ -20,8 +20,10 @@ const SCHEMA = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 function fresh() {
   const raw = new DatabaseSync(':memory:');
   raw.exec(SCHEMA);
-  raw.exec(`INSERT INTO profiles (id,slug,name,active,is_default,created_at,updated_at)
-            VALUES ('p-medium','medium','Medium',1,0,'2026-01-02','2026-01-02')`);
+  raw.exec(`
+    INSERT INTO profiles (id,slug,name,active,is_default,created_at,updated_at)
+      VALUES ('p-creative','creative','Creative',1,1,'2026-01-01','2026-01-01'),
+             ('p-medium','medium','Medium',1,0,'2026-01-02','2026-01-02')`);
   const run = (sql, args) => raw.prepare(sql).run(...args);
   const mk = (sql, args = []) => ({
     sql, args,

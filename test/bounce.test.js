@@ -114,8 +114,8 @@ test('revive reports the unique-index collision instead of failing silently', as
 // ---------------------------------------------------------------------------
 
 test('stripControlKeepLines keeps the line breaks that stripControl destroys', () => {
-  const body = 'Hi Ada,\r\n\r\nI saw your glaze series.\n\nBest,\nLucía';
-  assert.equal(stripControlKeepLines(body), 'Hi Ada,\n\nI saw your glaze series.\n\nBest,\nLucía');
+  const body = 'Hi Ada,\r\n\r\nI saw your glaze series.\n\nBest,\nRowan';
+  assert.equal(stripControlKeepLines(body), 'Hi Ada,\n\nI saw your glaze series.\n\nBest,\nRowan');
 });
 
 test('stripControlKeepLines removes header-injection characters', () => {

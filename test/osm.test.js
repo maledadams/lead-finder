@@ -1,6 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isChain, nicheForTags, toCandidates, METROS } from '../src/osm.js';
+import { isChain, nicheForTags, osmSpecFor, toCandidates, METROS } from '../src/osm.js';
+
+/**
+ * A profile's own taxonomy, standing in for whatever a real one defines.
+ *
+ * These used to be constants in src/osm.js, which meant every clone of this
+ * repository inherited one person's idea of which shops are worth finding. The
+ * mapping is now per profile, so the test brings its own.
+ */
+const PROFILE = {
+  niches: {
+    ceramics: { label: 'Ceramics', osm: { shop: ['pottery'], craft: ['potter'], amenity: [], healthcare: [], office: [] } },
+    food: { label: 'Food', osm: { shop: ['bakery'], craft: ['brewery'], amenity: [], healthcare: [], office: [] } },
+    clinics: { label: 'Clinics', osm: { amenity: ['dentist'], healthcare: ['physiotherapist'], craft: [], shop: [], office: [] } },
+  },
+  discovery: { social: true, exclude_names: '\\b(?:cleaners?|laundr)' },
+};
+const SPEC = osmSpecFor(PROFILE);
 
 test('chains are detected deterministically from OSM tags', () => {
   assert.ok(isChain({ name: 'H&M', 'brand:wikidata': 'Q188326' }));
@@ -10,15 +27,29 @@ test('chains are detected deterministically from OSM tags', () => {
   assert.ok(!isChain({ name: 'Fifty24Pdx Gallery', website: 'https://fifty24pdx.com' }));
 });
 
-test('OSM categories map onto the niche taxonomy', () => {
-  assert.equal(nicheForTags({ shop: 'pottery' }), 'craft_goods');
-  assert.equal(nicheForTags({ craft: 'jeweller' }), 'craft_goods');
-  assert.equal(nicheForTags({ shop: 'cosmetics' }), 'beauty_wellness');
-  assert.equal(nicheForTags({ shop: 'bakery' }), 'food_bev');
-  assert.equal(nicheForTags({ craft: 'brewery' }), 'food_bev');
-  assert.equal(nicheForTags({ shop: 'art' }), 'artist_portfolio');
-  assert.equal(nicheForTags({ shop: 'clothes' }), 'alt_fashion');
-  assert.equal(nicheForTags({ shop: 'unknown_thing' }), 'lifestyle_brand');
+test('a business is filed under the category that claimed its tag', () => {
+  assert.equal(nicheForTags({ shop: 'pottery' }, SPEC), 'ceramics');
+  assert.equal(nicheForTags({ craft: 'potter' }, SPEC), 'ceramics');
+  assert.equal(nicheForTags({ shop: 'bakery' }, SPEC), 'food');
+  assert.equal(nicheForTags({ craft: 'brewery' }, SPEC), 'food');
+  assert.equal(nicheForTags({ amenity: 'dentist' }, SPEC), 'clinics');
+  assert.equal(nicheForTags({ healthcare: 'physiotherapist' }, SPEC), 'clinics');
+  // Anything unclaimed falls to the profile's first category rather than to a
+  // slug from somebody else's taxonomy.
+  assert.equal(nicheForTags({ shop: 'unknown_thing' }, SPEC), 'ceramics');
+});
+
+test('a profile with no OSM tags ships no taxonomy of its own', () => {
+  const bare = osmSpecFor(null);
+  assert.equal(bare.byNiche, null, 'nothing is built in');
+  assert.deepEqual(Object.values(bare.tags).flat(), [], 'and nothing is searched for');
+  assert.equal(bare.nameFilter, null);
+  assert.equal(bare.social, false, 'a lead with a phone and no website is not excluded by default');
+});
+
+test('a broken exclusion pattern is ignored rather than thrown', () => {
+  const spec = osmSpecFor({ niches: {}, discovery: { exclude_names: '([unclosed' } });
+  assert.equal(spec.nameFilter, null, 'a bad regex typed into Settings must not stop a crawl');
 });
 
 test('toCandidates drops chains, dedupes domains, keeps US address', () => {
@@ -30,11 +61,11 @@ test('toCandidates drops chains, dedupes domains, keeps US address', () => {
     { tags: { name: "Ken's Artisan", shop: 'bakery', website: 'https://kensartisan.com/' } },
     { tags: { name: 'No Site', shop: 'art' } },
   ];
-  const out = toCandidates(els, 'portland-or');
+  const out = toCandidates(els, 'portland-or', SPEC);
 
   assert.equal(out.length, 1, 'one usable independent business');
   assert.equal(out[0].domain, 'kensartisan.com');
-  assert.equal(out[0].niche, 'food_bev');
+  assert.equal(out[0].niche, 'food');
   assert.equal(out[0].country, 'US');
   assert.equal(out[0].location_text, 'Portland, OR');
   assert.equal(out[0].discovery_source, 'osm:portland-or');
@@ -90,28 +121,29 @@ test('untagged franchises are caught by name shape', () => {
   assert.ok(!isChain({ name: 'Fifty24Pdx Gallery' }));
 });
 
-test('service businesses are rejected even when tagged as craft', async () => {
-  const { toCandidates } = await import('../src/osm.js');
-  // Every one of these came back from a real Brooklyn sweep tagged craft=tailor.
+test("a profile's own name filter rejects what its tags let through", () => {
+  // OSM tags dry cleaners as craft=tailor, so a search for makers returns them
+  // by the dozen. Which names to exclude is a judgement about one operation, so
+  // it belongs to the profile — here, the exclude_names in PROFILE above.
   const els = [
-    'Mulberry Cleaners', 'Yes Cleaners', 'Coleman Cleaners', 'JSK Cleaners',
-    'Dunrite Cleaners', "Mario's French Cleaners", 'Eden Dry Cleaners & Tailoring',
-    'Lucky U Cleaners', 'LNC Tailor Shop', 'Fulton Cobbler',
-  ].map((name) => ({ tags: { name, craft: 'tailor', 'contact:instagram': '@x' } }));
+    'Mulberry Cleaners', 'Yes Cleaners', 'Eden Dry Cleaners & Tailoring', 'Lucky U Laundry',
+  ].map((name) => ({ tags: { name, shop: 'pottery', 'contact:instagram': '@x' } }));
 
-  assert.equal(toCandidates(els, 'brooklyn-ny').length, 0, 'no service shops should survive');
+  assert.equal(toCandidates(els, 'brooklyn-ny', SPEC).length, 0, 'none should survive');
+  // And with no filter configured, nothing is excluded on a hunch.
+  assert.equal(toCandidates(els, 'brooklyn-ny', osmSpecFor({ niches: PROFILE.niches })).length, 4);
 });
 
 test('genuine makers without a website still come through', async () => {
   const { toCandidates } = await import('../src/osm.js');
   const els = [
-    { tags: { name: 'Palm Jewelry', shop: 'jewelry', 'contact:instagram': '@palmjewelry',
+    { tags: { name: 'Palm Ceramics', shop: 'pottery', 'contact:instagram': '@palmceramics',
               phone: '+17182847699', 'addr:city': 'Brooklyn', 'addr:state': 'NY' } },
-    { tags: { name: 'Brooklyn Rockwerks', craft: 'sculptor', 'contact:instagram': '@rockwerks' } },
+    { tags: { name: 'Rockwerks Bakery', shop: 'bakery', 'contact:instagram': '@rockwerks' } },
   ];
-  const out = toCandidates(els, 'brooklyn-ny');
+  const out = toCandidates(els, 'brooklyn-ny', SPEC);
   assert.equal(out.length, 2);
   assert.equal(out[0].has_website, false);
-  assert.equal(out[0].niche, 'craft_goods');
-  assert.equal(out[1].niche, 'artist_portfolio');
+  assert.equal(out[0].niche, 'ceramics');
+  assert.equal(out[1].niche, 'food');
 });
