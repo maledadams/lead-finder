@@ -386,6 +386,7 @@ export default {
           sending,
           profile,
           profiles: await listProfiles(db),
+          env,
           calendar: view === 'calendar' ? await upcomingBookings(env) : null,
           day: url.searchParams.get('day') || todayStr(),
           page: Math.max(1, Number(url.searchParams.get('page')) || 1),

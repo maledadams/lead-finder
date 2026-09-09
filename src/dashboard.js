@@ -21,46 +21,11 @@
 
 import { renderMetrics } from './metrics.js';
 import { bookingUrl } from './outreach.js';
-
-const esc = (s) =>
-  String(s ?? '').replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+import { confirmDialog, esc, icon, settingsDialog } from './ui.js';
 
 // Twenty a page, everywhere that lists entries. Also the cheapest single
 // optimisation here: a history page reads 60% fewer rows than it did at fifty.
 const PER_PAGE = 20;
-
-const TITLES = {
-  today: 'Today',
-  sent: 'Sent',
-  skipped: 'Skipped',
-  bounced: 'Bounced',
-  metrics: 'Metrics',
-  calendar: 'Calendar',
-};
-
-/**
- * The rail icons.
- *
- * Inlined rather than pulled from an icon package, which is not a compromise
- * here: the CSP is `default-src 'none'` with no host allowed, so a CDN icon
- * font or sprite sheet cannot load at all, and shipping a dependency to render
- * six 24px glyphs would be heavier than the glyphs. Drawn in the Phosphor
- * manner — 24px box, single stroke weight, round caps — so they read as one set.
- */
-const ICONS = {
-  today: '<rect x="3.5" y="3.5" width="17" height="17" rx="4.5"/><path d="M8.2 12.4l2.9 2.9 4.7-5.9"/>',
-  sent: '<path d="M20.6 3.4 3.4 9.9l7.1 3.6 3.6 7.1z"/><path d="M10.5 13.5 20.6 3.4"/>',
-  skipped: '<circle cx="12" cy="12" r="8.5"/><path d="M6.4 17.6 17.6 6.4"/>',
-  bounced: '<path d="M8.2 3.6 3.4 8.4l4.8 4.8"/><path d="M3.4 8.4h11.2a5.9 5.9 0 0 1 5.9 5.9v6.1"/>',
-  metrics: '<path d="M4 20h16"/><path d="M7.6 20v-7.4"/><path d="M12 20V6.6"/><path d="M16.4 20v-4.6"/>',
-  calendar: '<rect x="3.5" y="5.8" width="17" height="14.7" rx="3.2"/><path d="M8.2 3v4M15.8 3v4M3.5 10.6h17"/>',
-  globe: '<circle cx="12" cy="12" r="8.6"/><path d="M3.4 12h17.2"/>'
-    + '<path d="M12 3.4c2.25 2.4 3.5 5.4 3.5 8.6s-1.25 6.2-3.5 8.6c-2.25-2.4-3.5-5.4-3.5-8.6S9.75 5.8 12 3.4z"/>',
-  instagram: '<rect x="3.6" y="3.6" width="16.8" height="16.8" rx="5"/><circle cx="12" cy="12" r="4.1"/>'
-    + '<circle cx="16.85" cy="7.15" r="1.05" fill="currentColor" stroke="none"/>',
-  glass: '<circle cx="10.8" cy="10.8" r="6.9"/><path d="M15.9 15.9 21 21"/>',
-};
 
 /**
  * Their website and their Instagram, wherever a business appears.
@@ -79,9 +44,16 @@ function siteLinks(r) {
     : ''}`;
 }
 
-const icon = (name) =>
-  `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"`
-  + ` stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+
+const TITLES = {
+  today: 'Today',
+  sent: 'Sent',
+  skipped: 'Skipped',
+  bounced: 'Bounced',
+  metrics: 'Metrics',
+  calendar: 'Calendar',
+};
+
 
 export async function renderDashboard(db, env, opts = {}) {
   const {
@@ -650,7 +622,67 @@ function pager(current, pages) {
  * Light is the default. Dark is a deliberate choice, remembered per browser,
  * not a reflection of the OS setting.
  */
-function shell({ view, nonce, signedInAs, sending, counts, body, profile, profiles }) {
+/**
+ * What Settings contains, at this stage.
+ *
+ * Anything disruptive belongs in here rather than beside the work it disrupts:
+ * creating a profile is not something to do by accident while reading a queue,
+ * which is exactly what a form in the sidebar invites.
+ */
+function settingsPanels({ profile, profiles, sending, env }) {
+  const rows = (profiles.length ? profiles : [profile]).map((p) => `
+    <div class="srow" data-pid="${esc(p.id)}">
+      <div>
+        <b>${esc(p.name)}</b>
+        ${p.id === profile.id ? '<span class="pill">open now</span>' : ''}
+        ${p.is_default ? '<span class="pill strong">default</span>' : ''}
+        <div class="dim sm">/${esc(p.slug)}</div>
+      </div>
+      <div class="srow-acts">
+        ${p.is_default ? '' :
+          `<button data-act="make-default" data-pid="${esc(p.id)}">Make default</button>`}
+        <a class="ext" href="/?profile=${encodeURIComponent(p.slug)}">Open</a>
+      </div>
+    </div>`).join('');
+
+  return [
+    {
+      id: 'profiles',
+      label: 'Profiles',
+      icon: 'today',
+      hint: 'Each profile is a separate operation. Switching one is switching account: leads, drafts, replies, lessons and metrics never mix.',
+      body: `<div class="srows">${rows}</div>
+        <h3>New profile</h3>
+        <p class="cap">Describe who you want to reach. The categories, the search
+          terms, the scoring brief and the email copy are written from this — you
+          do not configure any of it by hand.</p>
+        <label class="lb" for="pname">Name</label>
+        <input id="pname" type="text" maxlength="80" placeholder="Medium businesses">
+        <label class="lb" for="pbrief">Who do you want to reach?</label>
+        <textarea id="pbrief" rows="4" placeholder="Two sentences is enough — the trades, the size of business, and anything that would disqualify one."></textarea>
+        <div class="acts"><button id="pcreate" class="go">Create profile</button></div>`,
+    },
+    {
+      id: 'sending',
+      label: 'Sending',
+      icon: 'sent',
+      hint: 'One mailbox, one reputation — so the daily cap is shared by every profile rather than counted per profile.',
+      body: `<div class="srows">
+        <div class="srow"><div><b>Zoho</b><div class="dim sm">${
+          sending?.connected ? 'connected' : 'not connected'}</div></div>
+          <div class="srow-acts">${sending?.connected
+            ? '<button data-act="refresh-signature">Refresh signature</button>'
+            : '<a class="ext" href="/api/zoho/connect">Connect</a>'}</div></div>
+        <div class="srow"><div><b>Sent today</b><div class="dim sm">${
+          esc(sending?.sent_today ?? 0)} of ${esc(sending?.daily_cap ?? 30)}</div></div></div>
+        <div class="srow"><div><b>Bounce label</b><div class="dim sm">${
+          esc(env?.ZOHO_BOUNCE_LABEL || 'bounce')} — mail carrying this label is read on every cron tick</div></div></div>
+      </div>`,
+    },
+  ];
+}
+
+function shell({ view, nonce, signedInAs, sending, counts, body, profile, profiles, env }) {
   // Every link carries the profile, so a middle-click into a new tab lands in
   // the same operation rather than in whichever one is default.
   const qs = `?profile=${encodeURIComponent(profile.slug)}`;
@@ -762,6 +794,11 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
        text-decoration:none;font-size:14px;white-space:nowrap;color:var(--muted);
        transition:background .15s,color .15s}
   .nav:hover{background:var(--c-2);color:var(--fg)}
+  /* Settings is a button, not a link, but it sits in the same list and must
+     look identical. It also stays put when the rail switches to documentation. */
+  button.nav{border:0;background:none;width:100%;font-size:14px;font-weight:400}
+  button.nav:hover{background:var(--c-2);color:var(--fg)}
+  .pinned{margin-top:4px}
   .nav[aria-current="page"]{background:var(--p50);color:var(--p600);font-weight:600}
   :root[data-theme="dark"] .nav[aria-current="page"]{background:rgba(0,111,238,.18);color:var(--p300)}
   @media (prefers-color-scheme:dark){
@@ -877,6 +914,54 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   .drawer textarea{min-height:64px;line-height:1.65;resize:vertical}
   .drawer textarea.tall{min-height:300px}
   .hint{font-size:12.5px;color:var(--muted);margin:6px 0 8px;max-width:60ch}
+
+  /* ---- sheets: settings and the confirm ------------------------------ */
+  /* Native dialog, so the focus trap, Esc and the backdrop are the browser's
+     job rather than three hundred lines of ours. */
+  .sheet{border:0;padding:0;background:var(--c-1);color:var(--fg);
+         border-radius:var(--r-xl);box-shadow:var(--sh-m);max-height:86dvh}
+  .sheet::backdrop{background:rgba(17,24,28,.45);backdrop-filter:blur(6px)}
+  :root:not([data-theme="light"]) .sheet::backdrop{background:rgba(0,0,0,.6)}
+  .sheet.wide{width:min(880px,94vw);height:min(620px,86dvh);display:flex;flex-direction:column}
+  .sheet.ask{width:min(430px,94vw);padding:22px 24px 18px}
+  .sheet.ask h2{font-size:16px;margin:0 0 8px;letter-spacing:-.01em}
+  .sheet.ask .body{font-size:13.5px;color:var(--muted);margin:0 0 14px;line-height:1.6}
+  .sheet.ask .typed{display:block;margin:0 0 14px}
+  .sheet.ask input{width:100%;font:inherit;font-size:13.5px;padding:9px 11px;
+      border-radius:var(--r-s);border:1px solid var(--line);background:var(--c-2);color:var(--fg)}
+  .acts.end{justify-content:flex-end;margin-top:0}
+  /* Destructive: red text and border, never a solid red block. A filled button
+     is the one the eye goes to, and this must not be the easy one to hit. */
+  button.danger{border-color:var(--bad);color:var(--bad);background:none;font-weight:600}
+  button.danger:hover:not(:disabled){background:color-mix(in srgb,var(--bad) 12%,transparent)}
+
+  .shead{display:flex;align-items:center;gap:12px;padding:16px 18px;
+         border-bottom:1px solid var(--line)}
+  .shead h1{font-size:16px;margin:0}
+  .x{margin-left:auto;border:0;background:none;font-size:20px;line-height:1;padding:4px 9px;color:var(--muted)}
+  .sbody{display:grid;grid-template-columns:186px 1fr;flex:1;min-height:0}
+  .snavs{border-right:1px solid var(--line);padding:12px 10px;display:flex;
+         flex-direction:column;gap:2px;overflow-y:auto}
+  .snav{border:0;background:none;justify-content:flex-start;width:100%;
+        padding:8px 11px;font-size:13.5px;color:var(--muted);border-radius:var(--r-s)}
+  .snav:hover{background:var(--c-2);color:var(--fg)}
+  .snav.on{background:var(--p50);color:var(--p600);font-weight:600}
+  :root:not([data-theme="light"]) .snav.on{background:rgba(0,111,238,.18);color:var(--p300)}
+  .snav .ico{width:16px;height:16px}
+  .spanes{overflow-y:auto;padding:18px 22px 26px}
+  .spane h2{font-size:15px;margin:0 0 4px;text-transform:none;letter-spacing:-.01em;color:var(--fg)}
+  .spane h3{margin:22px 0 4px}
+  .spane .cap{margin-bottom:14px}
+  .spane input,.spane textarea{width:100%;font:inherit;font-size:13.5px;padding:9px 11px;
+      border-radius:var(--r-s);border:1px solid var(--line);background:var(--c-2);
+      color:var(--fg);margin-bottom:8px;resize:vertical}
+  .srows{border-top:1px solid var(--line)}
+  .srow{display:flex;align-items:center;gap:14px;padding:12px 2px;
+        border-bottom:1px solid var(--line)}
+  .srow-acts{margin-left:auto;display:flex;gap:8px;align-items:center;flex:none}
+  .srow .pill{margin-left:6px}
+  @media (max-width:640px){ .sbody{grid-template-columns:1fr}
+    .snavs{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line)} }
 
   .empty,.nodata{background:var(--c-2);border:1px dashed var(--line);border-radius:var(--r-l);
          padding:32px;text-align:center;color:var(--muted);margin-top:14px;font-size:13.5px}
@@ -1001,12 +1086,9 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   ${item('/metrics', 'metrics', 'Metrics', 0)}
   ${item('/calendar', 'calendar', 'Calendar', 0)}
 
-  <details class="newp">
-    <summary>New profile</summary>
-    <input id="pname" type="text" placeholder="What to call it" maxlength="80">
-    <textarea id="pbrief" rows="4" placeholder="Who do you want to reach? Two sentences is enough — the trades, the size of business, and anything that would disqualify one."></textarea>
-    <button id="pcreate" type="button" class="go sm">Create</button>
-  </details>
+  <button class="nav pinned" data-act="open-settings" aria-haspopup="dialog">
+    ${icon('settings')}<span>Settings</span>
+  </button>
 
   <div class="foot">
     <b>${counts.contacted || 0}</b> contacted all time<br>
@@ -1021,6 +1103,8 @@ ${body}
 </main>
 </div>
 <div class="flash" id="flash" role="status" aria-live="polite"></div>
+${settingsDialog(settingsPanels({ profile, profiles, sending, env }))}
+${confirmDialog()}
 
 <script nonce="${esc(nonce)}">
 // No key here. The session cookie is sent automatically and the URL stays
@@ -1041,6 +1125,69 @@ async function post(path, body){
   if(!r.ok) throw new Error(data.error || ('request failed (' + r.status + ')'));
   return data;
 }
+// ---- the confirm dialog ---------------------------------------------------
+//
+// One implementation, used by everything destructive. Returns a promise so a
+// caller reads as an await inside an if, rather than as a callback, and
+// <dialog> supplies the focus trap, Esc and the backdrop for free.
+const askEl = document.getElementById('confirm');
+function askConfirm({ body = '', confirmLabel = 'Delete this', requireText = null } = {}) {
+  const yes = document.getElementById('confirm-yes');
+  const no = document.getElementById('confirm-no');
+  const wrap = document.getElementById('confirm-typed');
+  const input = document.getElementById('confirm-input');
+  const opener = document.activeElement;
+
+  document.getElementById('confirm-body').textContent = body;
+  yes.textContent = confirmLabel;
+  wrap.hidden = !requireText;
+  input.value = '';
+
+  // The typed-name guard. The button stays dead until the name matches exactly,
+  // so this cannot be got past by hammering Enter.
+  const gate = () => { yes.disabled = Boolean(requireText) && input.value.trim() !== requireText; };
+  if (requireText) {
+    document.getElementById('confirm-typed-label').textContent = 'Type ' + requireText + ' to confirm';
+    input.addEventListener('input', gate);
+  }
+  gate();
+
+  return new Promise((resolve) => {
+    const done = (ok) => {
+      askEl.close();
+      input.removeEventListener('input', gate);
+      // Focus goes back where it came from, or the page loses its place.
+      if (opener && opener.focus) opener.focus();
+      resolve(ok);
+    };
+    yes.onclick = () => done(true);
+    no.onclick = () => done(false);
+    // Esc and the backdrop both mean no.
+    askEl.addEventListener('close', () => done(false), { once: true });
+    askEl.showModal();
+    no.focus();
+  });
+}
+
+// ---- settings -------------------------------------------------------------
+const settingsEl = document.getElementById('settings');
+function openSettings(panel){
+  settingsEl.showModal();
+  if (panel) showPanel(panel);
+}
+function showPanel(id){
+  for (const b of settingsEl.querySelectorAll('.snav')) {
+    const on = b.dataset.panel === id;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', String(on));
+  }
+  for (const s of settingsEl.querySelectorAll('.spane')) s.hidden = s.id !== 'panel-' + id;
+}
+// Deep link, so another page can send you to one panel: /skipped#settings/categories
+if (location.hash.startsWith('#settings')) {
+  openSettings(location.hash.split('/')[1] || null);
+}
+
 const holder = (el) => el.closest('.card, .row');
 
 // A button inside a drawer reads the field in ITS drawer, not the first one that
@@ -1167,6 +1314,30 @@ if (create) create.addEventListener('click', async () => {
 document.addEventListener('click', async (ev) => {
   const b = ev.target.closest('button');
   if(!b) return;
+
+  if(b.dataset.act === 'open-settings'){ openSettings(); return; }
+  if(b.dataset.act === 'close-settings'){ settingsEl.close(); return; }
+  if(b.dataset.panel){ showPanel(b.dataset.panel); return; }
+
+  if(b.dataset.act === 'make-default'){
+    b.disabled = true;
+    try {
+      await post('/api/profiles/' + b.dataset.pid + '/default');
+      flash('Default profile changed');
+      setTimeout(()=>location.reload(), 900);
+    } catch(e){ b.disabled = false; flash(e.message); }
+    return;
+  }
+  if(b.dataset.act === 'refresh-signature'){
+    b.disabled = true;
+    try {
+      const r = await fetch('/api/zoho/signature?refresh=1', {credentials:'same-origin'});
+      const d = await r.json();
+      flash(d.ok === false ? (d.error || 'Could not read the signature') : 'Signature refreshed');
+    } catch(e){ flash(e.message); }
+    b.disabled = false;
+    return;
+  }
   const card = holder(b);
   const id = card && card.dataset.oid;
 

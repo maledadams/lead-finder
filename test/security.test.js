@@ -144,3 +144,38 @@ test('no two fields in one row share a name', async () => {
   assert.ok(names.includes('correction'), 'the notes pill has its own');
   assert.deepEqual([...new Set(names)], names, `a name is used twice: ${names}`);
 });
+
+/**
+ * The confirm dialog must never open with its destructive answer focused.
+ *
+ * A dialog that opens on "Delete this" deletes on a stray Enter, which is the
+ * one thing a confirmation exists to prevent.
+ */
+test('the confirm dialog opens on the safe answer', async () => {
+  const { confirmDialog } = await import('../src/ui.js');
+  const html = confirmDialog();
+
+  const no = html.indexOf('id="confirm-no"');
+  const yes = html.indexOf('id="confirm-yes"');
+  assert.ok(no > -1 && yes > -1, 'both answers exist');
+  assert.ok(no < yes, 'the safe answer comes first in the tab order');
+  assert.match(html.slice(no, yes), /autofocus/, 'and it holds the focus');
+  assert.ok(!/id="confirm-yes"[^>]*autofocus/.test(html), 'the destructive one must not');
+  assert.match(html, /class="danger"/, 'the destructive one is marked as such');
+  assert.match(html, /aria-labelledby="confirm-title"/, 'the dialog is labelled');
+});
+
+/** Icon-only controls are unusable without a name. */
+test('every icon-only control carries a label', async () => {
+  const { settingsDialog, confirmDialog } = await import('../src/ui.js');
+  const html = settingsDialog([{ id: 'a', label: 'A', icon: 'today', body: '' }]) + confirmDialog();
+
+  // A button whose entire content is an <svg> and nothing else.
+  for (const m of html.matchAll(/<button([^>]*)>\s*<svg[\s\S]*?<\/svg>\s*<\/button>/g)) {
+    assert.match(m[1], /aria-label=/, `icon-only button without a label: ${m[0].slice(0, 60)}`);
+  }
+  // And the decorative ones must be hidden from a screen reader.
+  for (const m of html.matchAll(/<svg([^>]*)>/g)) {
+    assert.match(m[1], /aria-hidden="true"/, 'a decorative icon is not hidden');
+  }
+});
