@@ -1253,6 +1253,12 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   /* ---- sheets: settings and the confirm ------------------------------ */
   /* Native dialog, so the focus trap, Esc and the backdrop are the browser's
      job rather than three hundred lines of ours. */
+  /* A closed dialog is hidden by the browser's own stylesheet — but ANY author
+     rule setting display beats it, and the wide rule below sets display:flex,
+     which did exactly that: settings rendered inline at the foot of every page,
+     visible and inert. The extra element selector keeps this ahead of it
+     whatever the source order. */
+  dialog.sheet:not([open]){display:none}
   .sheet{border:0;padding:0;background:var(--c-1);color:var(--fg);
          border-radius:var(--r-xl);box-shadow:var(--sh-m);max-height:86dvh}
   .sheet::backdrop{background:rgba(17,24,28,.45);backdrop-filter:blur(6px)}
@@ -1692,12 +1698,17 @@ function applyMd(kind){
   const rule = WRAP[kind];
   if(!rule || !body) return;
   const [before, after, placeholder] = rule;
+  // Like TICK above: the client script is inside a template literal, so a
+  // backslash escape here is eaten before the browser ever sees it. A literal
+  // newline in a string is a syntax error, and it broke every button on the
+  // page — settings, profile switching, all of it.
+  const NL = String.fromCharCode(10);
   const start = body.selectionStart;
   const end = body.selectionEnd;
   const chosen = body.value.slice(start, end) || placeholder;
   // Line prefixes go on every selected line; wrappers go around the selection.
   const made = after === ''
-    ? chosen.split('\n').map((l) => before + l).join('\n')
+    ? chosen.split(NL).map((l) => before + l).join(NL)
     : before + chosen + after;
   body.setRangeText(made, start, end, 'select');
   body.focus();

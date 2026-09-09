@@ -50,6 +50,78 @@ test('no backtick can get into the inlined client script', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 1b. The script the BROWSER receives has to parse.
+//
+//     dashboard.js parsing is not the same question. The client script is built
+//     inside a template literal, so a backslash escape written there is consumed
+//     before the browser sees it: `split('\\n')` in source became a string
+//     containing a real newline in the output — valid JavaScript in the file,
+//     a syntax error in the page. Every button died at once: settings would not
+//     open, the profile switcher did nothing, no handler ran at all.
+//
+//     Checking the source cannot catch that. Only the output can.
+// ---------------------------------------------------------------------------
+
+test('the script the browser receives parses', async () => {
+  const { renderDashboard, setupPage } = await import('../src/dashboard.js');
+
+  const first = async () => ({ todo: 0, sent: 0, skipped: 0, bounced: 0, contacted: 0, n: 0 });
+  const all = async () => ({ results: [] });
+  const db = { prepare: () => ({ first, all, bind: () => ({ first, all }) }) };
+  const profile = { id: 'p1', slug: 'p1', name: 'One', niches: {}, personas: {} };
+
+  const pages = [];
+  for (const view of ['today', 'sent', 'metrics']) {
+    pages.push([view, await renderDashboard(db, {}, {
+      view, nonce: 'n', day: '2026-09-09', page: 1, q: '', from: null, to: null,
+      profile, profiles: [], env: {},
+    })]);
+  }
+  pages.push(['setup', setupPage({}, 'n')]);
+
+  for (const [label, html] of pages) {
+    for (const m of html.matchAll(/<script nonce="[^"]*">([\s\S]*?)<\/script>/g)) {
+      // new Function parses without executing, which is exactly the question.
+      assert.doesNotThrow(() => new Function(m[1]),
+        `${label}: the inlined script does not parse in a browser`);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 1c. A closed <dialog> is hidden by the browser's own stylesheet, and ANY
+//     author rule setting display overrides it. `.sheet.wide{display:flex}`
+//     did, so the settings sheet rendered inline at the foot of every page —
+//     always visible, never interactive.
+// ---------------------------------------------------------------------------
+
+test('a closed dialog is hidden, whatever else styles it', async () => {
+  const { renderDashboard } = await import('../src/dashboard.js');
+  const first = async () => ({ todo: 0, sent: 0, skipped: 0, bounced: 0, contacted: 0, n: 0 });
+  const all = async () => ({ results: [] });
+  const db = { prepare: () => ({ first, all, bind: () => ({ first, all }) }) };
+
+  const html = await renderDashboard(db, {}, {
+    view: 'today', nonce: 'n', day: '2026-09-09', page: 1, q: '', from: null, to: null,
+    profile: { id: 'p1', slug: 'p1', name: 'One', niches: {} }, profiles: [], env: {},
+  });
+
+  const css = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
+  const hide = css.indexOf('dialog.sheet:not([open]){display:none}');
+  assert.ok(hide > -1, 'nothing hides a closed dialog');
+
+  // Every rule that gives a dialog a display must be beaten by that one.
+  for (const m of css.matchAll(/\.sheet[^{}]*\{[^}]*display:[^};]+/g)) {
+    assert.ok(hide < m.index || m[0].includes('[open]'),
+      `a later rule sets display on a dialog and will show it closed: ${m[0].slice(0, 60)}`);
+  }
+
+  // And no dialog may ship with the open attribute already set.
+  assert.equal((html.match(/<dialog[^>]*\sopen/g) || []).length, 0,
+    'a dialog that starts open is a page with a sheet stuck to it');
+});
+
+// ---------------------------------------------------------------------------
 // 2. A query against a table schema.sql does not create fails only at runtime,
 //    on whichever page happens to run it. Both new tables shipped this way.
 // ---------------------------------------------------------------------------
