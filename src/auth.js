@@ -57,6 +57,17 @@ export function googleConfigured(env) {
 }
 
 async function hmac(secret, message) {
+  // An unset SESSION_SECRET reaches WebCrypto as a zero-length key and comes
+  // back as "Imported HMAC key length (0) must be a non-zero value…", which
+  // says nothing about what is actually wrong. Signing with an empty secret
+  // would be worse: every session cookie would be forgeable.
+  //
+  // Deliberately only the empty case. A short secret is weak but it WORKS, and
+  // a length rule added later would lock an existing deployment out of its own
+  // dashboard on the next deploy — a worse outcome than the weakness.
+  if (!secret) {
+    throw new Error('SESSION_SECRET is not set — run: wrangler secret put SESSION_SECRET');
+  }
   const key = await crypto.subtle.importKey(
     'raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
   );

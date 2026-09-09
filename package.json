@@ -12,9 +12,12 @@
     "db:init:local": "wrangler d1 execute lead-finder --local --file=./schema.sql",
     "db:console": "wrangler d1 execute lead-finder --remote --command",
     "tail": "wrangler tail",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:browser": "node test/browser.mjs",
+    "dev:test": "wrangler dev --local --port 8787 --var REQUIRE_ACCESS:false --var SESSION_SECRET:local-browser-test-secret-value"
   },
   "devDependencies": {
+    "playwright": "^1.63.0",
     "wrangler": "^4.128.0"
   },
   "dependencies": {

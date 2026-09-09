@@ -117,3 +117,24 @@ test('Zoho is only considered usable with real credentials', async () => {
   assert.match(authorizeUrl({ ZOHO_CLIENT_ID: 'c', ZOHO_REGION: 'eu' }, 'https://x.test/cb', 's'),
     /accounts\.zoho\.eu/);
 });
+
+test('an unset SESSION_SECRET fails with something a person can act on', async () => {
+  const { exchangeKeyForSession } = await import('../src/auth.js');
+  // This is the path a new install hits first: open the dashboard with ?key=,
+  // and the key is swapped for a session cookie. With no SESSION_SECRET set,
+  // WebCrypto answers "Imported HMAC key length (0) must be a non-zero value…",
+  // which sends someone looking at their crypto rather than their config.
+  // Signing with an empty secret would be worse: every cookie forgeable.
+  await assert.rejects(() => exchangeKeyForSession({}, 'https://x.test/?key=a'),
+    /SESSION_SECRET/);
+  // Only the empty case is refused. A short secret is weak but functional, and
+  // rejecting it would lock an existing deployment out on its next deploy.
+  const short = await exchangeKeyForSession({ SESSION_SECRET: 'short' }, 'https://x.test/?key=a');
+  assert.equal(short.status, 302, 'a weak but working secret is not broken by this check');
+
+  // And a real one still works.
+  const good = await exchangeKeyForSession(
+    { SESSION_SECRET: 'a-long-enough-secret-value' }, 'https://x.test/?key=a'
+  );
+  assert.equal(good.status, 302, 'a configured install still signs people in');
+});

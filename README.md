@@ -183,19 +183,27 @@ Then it crawls. There is nothing else to configure and no file to edit.
 ### Local development
 
 ```bash
-cat > .dev.vars <<'EOF'
-DASHBOARD_KEY=any-long-random-string
-REQUIRE_ACCESS=false
-ALLOWED_EMAILS=you@example.com
-EOF
-
-npm run db:init:local
-npm run dev      # http://localhost:8787
-npm test         # 122 tests, no network, no database needed
+npm run db:init:local          # build a local database from schema.sql
+npm run dev:test               # a dev server with Access off and a test secret
 ```
 
-`.dev.vars` is gitignored and overrides `wrangler.toml` locally, which is how
-local development keeps working while production requires Access.
+Then open the printed URL with `?key=` and your `DASHBOARD_KEY`.
+
+`npm test` is server-side and fast. `npm run test:browser` drives the real UI in
+Chromium against that dev server, and is worth running before anything that
+touches the dashboard: the worst bug in this project's history was an escape
+consumed by a template literal, which emitted a syntax error into the page and
+killed every handler while all 252 server-side tests stayed green. A rendered
+string is not a working page.
+
+```bash
+npx playwright install chromium   # once
+npm run test:browser
+```
+
+It clicks through settings, the profile switcher, pagination, search, the bounce
+drawer, skip gating, the documentation editor and a real create-then-delete of a
+skip category, and fails on any browser console error.
 
 ### Sending email
 

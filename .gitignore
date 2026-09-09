@@ -20,3 +20,7 @@ dist/
 
 # local design-tool config
 .impeccable/
+
+# Playwright's browser binaries and traces
+test-results/
+playwright-report/

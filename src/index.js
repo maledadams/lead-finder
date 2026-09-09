@@ -265,6 +265,16 @@ export default {
       return json({ error: 'unavailable' }, 503);
     }
 
+    // Checked here rather than at the point of use: without it the first sign-in
+    // fails inside WebCrypto with a message about key lengths, which sends a new
+    // install looking in entirely the wrong place.
+    if (!env.SESSION_SECRET) {
+      return json({
+        error: 'SESSION_SECRET is not set',
+        fix: 'wrangler secret put SESSION_SECRET (any long random string)',
+      }, 503);
+    }
+
     // ---- Zoho OAuth callback --------------------------------------------
     // Outside the auth gate on purpose: Zoho sends the browser here with only
     // ?code and ?state, so requiring the dashboard key would reject the one
@@ -470,6 +480,10 @@ export default {
           profile,
           profiles: await listProfiles(db),
           env,
+          // What the geography panel reports. Without it the hint read
+          // "0 places are in rotation" on every install, which is alarming and
+          // wrong — the built-in list alone is over a thousand.
+          metroCount: (await metrosFor(db, profile)).length,
           calendar: view === 'calendar' ? await upcomingBookings(env) : null,
           day: url.searchParams.get('day') || todayStr(),
           page: Math.max(1, Number(url.searchParams.get('page')) || 1),

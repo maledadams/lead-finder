@@ -119,6 +119,12 @@ test('a closed dialog is hidden, whatever else styles it', async () => {
   // And no dialog may ship with the open attribute already set.
   assert.equal((html.match(/<dialog[^>]*\sopen/g) || []).length, 0,
     'a dialog that starts open is a page with a sheet stuck to it');
+
+  // The same trap catches [hidden]: it is only a UA rule, so any author rule
+  // setting display beats it. The confirm dialog's typed-name field showed on
+  // every delete for exactly that reason.
+  assert.match(css, /\[hidden\]\{display:none!important\}/,
+    'nothing forces [hidden] to stay hidden');
 });
 
 // ---------------------------------------------------------------------------

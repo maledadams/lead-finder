@@ -50,6 +50,11 @@ export function setupPage(env, nonce) {
   @media (prefers-color-scheme:dark){:root{--bg:#000;--fg:#ECEDEE;--c-2:#18181b;
         --line:#27272a;--muted:#a1a1aa}}
   *{box-sizing:border-box}
+  /* The same trap as the closed dialog: [hidden] is only a UA rule, so any
+     author rule setting display beats it and the element stays on screen. The
+     confirm dialog's typed-name field appeared on every delete because of
+     exactly that. One !important protects every use of hidden. */
+  [hidden]{display:none!important}
   body{margin:0;background:var(--bg);color:var(--fg);
        font:15px/1.65 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
   main{max-width:44rem;margin:12vh auto;padding:0 1.4rem}
@@ -995,6 +1000,11 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   }
 
   *{box-sizing:border-box}
+  /* The same trap as the closed dialog: [hidden] is only a UA rule, so any
+     author rule setting display beats it and the element stays on screen. The
+     confirm dialog's typed-name field appeared on every delete because of
+     exactly that. One !important protects every use of hidden. */
+  [hidden]{display:none!important}
   body{margin:0;background:var(--bg);color:var(--fg);
        font:15px/1.6 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
        -webkit-font-smoothing:antialiased}
@@ -1218,12 +1228,12 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   button.no:hover:not(:disabled){background:color-mix(in srgb,var(--bad) 20%,transparent)}
   button:disabled{opacity:.45;cursor:default}
   .acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center}
-  .notes{display:flex;align-items:center;gap:7px;margin-left:auto;flex:1;min-width:280px;max-width:520px}
+  .notes{display:flex;align-items:center;gap:7px;margin-left:auto;flex:1;min-width:300px;max-width:560px}
   /* On a history row the notes belong at the right-hand end, as one group.
      Growing to fill made them start where the buttons stop, which is why they
      read as left-aligned no matter how much room was left over. */
   .row .notes{flex:0 1 auto;min-width:0;justify-content:flex-end}
-  .row .npill{flex:0 1 230px;min-width:150px}
+  .row .npill{flex:1 1 250px;min-width:200px}
   .nlab{font-size:12.5px;color:var(--muted);white-space:nowrap}
   .opt{margin-left:4px;font-size:11px;opacity:.75}
   .nsend{padding:6px 13px;border-radius:99px;font-size:12.5px;white-space:nowrap;flex:none}
@@ -1265,7 +1275,9 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   :root:not([data-theme="light"]) .sheet::backdrop{background:rgba(0,0,0,.6)}
   .sheet.wide{width:min(880px,94vw);height:min(620px,86dvh);display:flex;flex-direction:column}
   .sheet.ask{width:min(430px,94vw);padding:22px 24px 18px}
-  .sheet.ask h2{font-size:16px;margin:0 0 8px;letter-spacing:-.01em}
+  /* h2 is uppercase everywhere else, which reads as shouting in a dialog. */
+  .sheet.ask h2{font-size:16px;margin:0 0 8px;letter-spacing:-.01em;
+       text-transform:none;color:var(--fg);font-weight:650}
   .sheet.ask .body{font-size:13.5px;color:var(--muted);margin:0 0 14px;line-height:1.6}
   .sheet.ask .typed{display:block;margin:0 0 14px}
   .sheet.ask input{width:100%;font:inherit;font-size:13.5px;padding:9px 11px;
