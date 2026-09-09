@@ -6,7 +6,7 @@
 -- recorded here whether or not it could be attributed to a lead: an
 -- unattributable notice must not be re-examined on every tick forever.
 --
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/007_bounce_seen.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/007_bounce_seen.sql
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS bounce_seen (

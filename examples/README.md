@@ -1,6 +1,6 @@
 # Examples
 
-Not migrations. Nothing in here is applied by `npm run db:init`, and none of it
+Not migrations. Nothing in here is applied by `pnpm run db:init`, and none of it
 is needed to run this system.
 
 `profile-medium-businesses.sql` is one real profile, kept as a worked example of

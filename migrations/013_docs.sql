@@ -15,7 +15,7 @@
 -- than about one operation, so the common case is also the default.
 --
 -- Safe to re-run.
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/013_docs.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/013_docs.sql
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS docs (

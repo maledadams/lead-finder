@@ -20,7 +20,7 @@
 -- unsorted so they are classified again, rather than deleting your feedback.
 --
 -- Safe to re-run except the ALTER TABLE lines.
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/011_skip_categories.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/011_skip_categories.sql
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS skip_categories (

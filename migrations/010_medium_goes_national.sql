@@ -15,7 +15,7 @@
 -- of freezing today's snapshot into a row.
 --
 -- Safe to re-run.
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/010_medium_goes_national.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/010_medium_goes_national.sql
 -- ---------------------------------------------------------------------------
 
 UPDATE profiles SET metros = NULL, updated_at = '2026-09-08T00:00:00Z'

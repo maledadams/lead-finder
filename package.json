@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Persistent, deduplicating prospecting system for creative founder-led businesses. Runs on Cloudflare with the laptop off.",
+  "description": "Persistent, deduplicating prospecting system. Finds businesses, scores them, drafts the outreach, and waits for you to approve it. Runs on Cloudflare.",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
@@ -22,5 +22,6 @@
   },
   "dependencies": {
     "marked": "^18.0.12"
-  }
+  },
+  "packageManager": "pnpm@11.24.0"
 }

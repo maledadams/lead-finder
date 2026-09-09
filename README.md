@@ -139,28 +139,29 @@ for **your** business on first run, from one sentence describing who you want to
 reach, and they live in your database.
 
 ```bash
-git clone https://github.com/YOUR-NAME/lead-finder && cd lead-finder && npm install
+git clone https://github.com/YOUR-NAME/lead-finder && cd lead-finder
+pnpm install                      # pnpm is the package manager here
 
 # 1. Create the database, then paste the printed id into wrangler.toml
-npx wrangler d1 create lead-finder
+pnpm exec wrangler d1 create lead-finder
 
 # 2. Create every table. schema.sql is complete on its own —
 #    the files in migrations/ are only for upgrading an existing install.
-npm run db:init
+pnpm run db:init
 
 # 3. Secrets. None of these belong in a file you commit.
-npx wrangler secret put DASHBOARD_KEY          # any long random string
-npx wrangler secret put SESSION_SECRET         # any long random string
-npx wrangler secret put ZOHO_CLIENT_SECRET     # from your Zoho API console
-npx wrangler secret put CAL_BOOKING_URL        # optional: your booking link
-npx wrangler secret put CAL_API_KEY            # optional: shows bookings in the dashboard
+pnpm exec wrangler secret put DASHBOARD_KEY          # any long random string
+pnpm exec wrangler secret put SESSION_SECRET         # any long random string
+pnpm exec wrangler secret put ZOHO_CLIENT_SECRET     # from your Zoho API console
+pnpm exec wrangler secret put CAL_BOOKING_URL        # optional: your booking link
+pnpm exec wrangler secret put CAL_API_KEY            # optional: shows bookings in the dashboard
 
 # 4. Edit wrangler.toml — the header lists exactly which lines to change.
 #    SENDER_NAME, SENDER_EMAIL and SENDER_POSTAL_ADDRESS are required:
 #    the postal address is not optional, CAN-SPAM requires it in every email.
 
 # 5. Deploy, then open your dashboard.
-npx wrangler deploy
+pnpm exec wrangler deploy
 ```
 
 ### First run
@@ -183,13 +184,13 @@ Then it crawls. There is nothing else to configure and no file to edit.
 ### Local development
 
 ```bash
-npm run db:init:local          # build a local database from schema.sql
-npm run dev:test               # a dev server with Access off and a test secret
+pnpm run db:init:local          # build a local database from schema.sql
+pnpm run dev:test               # a dev server with Access off and a test secret
 ```
 
 Then open the printed URL with `?key=` and your `DASHBOARD_KEY`.
 
-`npm test` is server-side and fast. `npm run test:browser` drives the real UI in
+`pnpm test` is server-side and fast. `pnpm run test:browser` drives the real UI in
 Chromium against that dev server, and is worth running before anything that
 touches the dashboard: the worst bug in this project's history was an escape
 consumed by a template literal, which emitted a syntax error into the page and
@@ -197,8 +198,8 @@ killed every handler while all 252 server-side tests stayed green. A rendered
 string is not a working page.
 
 ```bash
-npx playwright install chromium   # once
-npm run test:browser
+pnpm exec playwright install chromium   # once
+pnpm run test:browser
 ```
 
 It clicks through settings, the profile switcher, pagination, search, the bounce
@@ -211,7 +212,7 @@ Sending is optional — without it the dashboard is a copy-and-paste queue. To
 send through Zoho Mail:
 
 1. Create a Zoho API client, set `ZOHO_CLIENT_ID` and `ZOHO_REGION` in
-   `wrangler.toml`, and `npx wrangler secret put ZOHO_CLIENT_SECRET`.
+   `wrangler.toml`, and `pnpm exec wrangler secret put ZOHO_CLIENT_SECRET`.
 2. Open `/api/zoho/connect` in the dashboard and authorise.
 
 Your Zoho signature is fetched from the account and attached at send time.
@@ -625,10 +626,10 @@ Stated plainly, because finding out later is worse:
 ## Development
 
 ```bash
-npm test          # 122 tests: pure functions and SQL shape, no network
-npm run dev       # local Worker against a local D1
-npm run deploy    # deploy to Cloudflare
-npm run tail      # live logs
+pnpm test          # 122 tests: pure functions and SQL shape, no network
+pnpm run dev       # local Worker against a local D1
+pnpm run deploy    # deploy to Cloudflare
+pnpm run tail      # live logs
 ```
 
 Upgrading an existing install applies the files in `migrations/` in order.
@@ -651,7 +652,7 @@ Good first contributions:
 
 Before opening a PR:
 
-- `npm test` is green (`node --test`, no network, no database)
+- `pnpm test` is green (`node --test`, no network, no database)
 - No new runtime dependencies — the Worker ships with none, and that is on
   purpose. Raise an issue first if you think one is unavoidable.
 - Match the surrounding style: plain ES modules, no framework, no build step,

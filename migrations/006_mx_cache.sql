@@ -10,7 +10,7 @@
 -- path, where an extra round trip per message would be paid forever.
 --
 -- NOTE: safe to re-run — this migration only creates.
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/006_mx_cache.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/006_mx_cache.sql
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS mx_cache (

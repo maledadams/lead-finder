@@ -15,7 +15,7 @@
 --
 -- NOTE: ALTER TABLE ADD COLUMN is not idempotent — running this twice errors.
 -- Same as 003. Apply once:
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/004_bounce_and_edit.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/004_bounce_and_edit.sql
 -- ---------------------------------------------------------------------------
 
 ALTER TABLE outreach ADD COLUMN bounced_at TEXT;

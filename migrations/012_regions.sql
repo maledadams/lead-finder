@@ -20,7 +20,7 @@
 -- that, and this column is the record that they did.
 --
 -- Safe to re-run.
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/012_regions.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/012_regions.sql
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS regions (

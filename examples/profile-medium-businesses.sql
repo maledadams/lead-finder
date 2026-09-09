@@ -16,7 +16,7 @@
 -- discard. Different cities means both profiles fill up.
 --
 -- Requires 008. Safe to re-run.
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/009_medium_profile.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./examples/profile-medium-businesses.sql
 -- ---------------------------------------------------------------------------
 
 INSERT OR REPLACE INTO profiles

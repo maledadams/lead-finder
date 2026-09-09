@@ -21,7 +21,7 @@
 --    may sit alongside each other freely.
 --
 -- NOTE: ALTER TABLE ADD COLUMN is not idempotent — running this twice errors.
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/005_skip_reason_and_merge_safety.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/005_skip_reason_and_merge_safety.sql
 -- ---------------------------------------------------------------------------
 
 ALTER TABLE entities ADD COLUMN skip_reason TEXT;

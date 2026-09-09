@@ -1,0 +1,7 @@
+# workerd IS the Workers runtime and esbuild is what bundles the Worker, so
+# without their install scripts wrangler cannot run or deploy at all. pnpm
+# blocks build scripts by default — the right default, and the wrong answer for
+# exactly these two.
+allowBuilds:
+  esbuild: true
+  workerd: true

@@ -29,17 +29,17 @@ The codebase splits cleanly in two:
 ## Development
 
 ```bash
-npm install
-npm run db:init:local
-npm run dev       # local Worker at http://localhost:8787
-npm test          # node --test — no network, no database
+pnpm install
+pnpm run db:init:local
+pnpm run dev       # local Worker at http://localhost:8787
+pnpm test          # node --test — no network, no database
 ```
 
 See the [Quick start](README.md#quick-start) in the README for a full deploy.
 
 ## Ground rules for a PR
 
-- **Tests pass.** `npm test` must be green. Non-trivial logic needs a test that
+- **Tests pass.** `pnpm test` must be green. Non-trivial logic needs a test that
   fails before your change and passes after.
 - **No new runtime dependencies.** The deployed Worker has zero. If you believe
   one is unavoidable, open an issue to discuss it before writing code.

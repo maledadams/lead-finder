@@ -5,9 +5,9 @@
 // syntax error into the page, every handler died, and every server-side check
 // stayed green. A rendered string is not a working page.
 //
-// Not part of `npm test` — it needs a dev server and a browser. Run it with:
-//   npm run test:browser
-// after `npx wrangler dev --local --port 8787 --var REQUIRE_ACCESS:false`.
+// Not part of `pnpm test` — it needs a dev server and a browser. Run it with:
+//   pnpm run test:browser
+// after `pnpm exec wrangler dev --local --port 8787 --var REQUIRE_ACCESS:false`.
 
 import { chromium } from 'playwright';
 import { readFileSync } from 'node:fs';

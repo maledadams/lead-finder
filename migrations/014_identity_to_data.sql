@@ -16,7 +16,7 @@
 -- code, and the switch is invisible.
 --
 -- Safe to re-run.
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/014_identity_to_data.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/014_identity_to_data.sql
 -- ---------------------------------------------------------------------------
 
 UPDATE profiles SET

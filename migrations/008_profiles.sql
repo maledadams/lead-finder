@@ -19,7 +19,7 @@
 -- the only one that has ever run.
 --
 -- Safe to re-run except the ALTER TABLE lines, as with every migration here.
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/008_profiles.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/008_profiles.sql
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS profiles (

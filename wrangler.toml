@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # TO RUN YOUR OWN COPY, change exactly these three lines:
 #
-#   database_id     from `npx wrangler d1 create lead-finder`
+#   database_id     from `pnpm exec wrangler d1 create lead-finder`
 #   routes.pattern  your own hostname, behind Cloudflare Access
 #   ZOHO_CLIENT_ID  from your own Zoho API console
 #
@@ -54,8 +54,8 @@ custom_domain = true
 [[d1_databases]]
 binding = "DB"
 database_name = "lead-finder"
-# Replace with the id printed by `npm run db:create`.
-database_id = "e8410da3-3981-428c-ba18-d5995825811e"  # yours: `npx wrangler d1 create lead-finder`
+# Replace with the id printed by `pnpm run db:create`.
+database_id = "e8410da3-3981-428c-ba18-d5995825811e"  # yours: `pnpm exec wrangler d1 create lead-finder`
 
 [ai]
 binding = "AI"

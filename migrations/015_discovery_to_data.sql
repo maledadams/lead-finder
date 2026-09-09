@@ -16,7 +16,7 @@
 -- preference to any default, so it will find exactly what it found yesterday.
 --
 -- Safe to re-run.
---   npx wrangler d1 execute lead-finder --remote --file=./migrations/015_discovery_to_data.sql
+--   pnpm exec wrangler d1 execute lead-finder --remote --file=./migrations/015_discovery_to_data.sql
 -- ---------------------------------------------------------------------------
 
 UPDATE profiles SET
