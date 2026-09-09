@@ -26,7 +26,9 @@ const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const PER_PAGE = 50;
+// Twenty a page, everywhere that lists entries. Also the cheapest single
+// optimisation here: a history page reads 60% fewer rows than it did at fifty.
+const PER_PAGE = 20;
 
 const TITLES = {
   today: 'Today',
@@ -379,8 +381,8 @@ async function historyView(db, pid, view, { page, q, from, to }, profile) {
   const where = ['o.profile_id = ?', 'o.status = ?'];
   const args = [pid, status];
   if (q) {
-    where.push('(e.display_name LIKE ? OR o.subject LIKE ?)');
-    args.push(`%${q}%`, `%${q}%`);
+    where.push('(e.display_name LIKE ? OR o.subject LIKE ? OR e.location_text LIKE ?)');
+    args.push(`%${q}%`, `%${q}%`, `%${q}%`);
   }
   if (from) { where.push(`${dateCol} >= ?`); args.push(from); }
   if (to) { where.push(`${dateCol} <= ?`); args.push(to); }
@@ -413,6 +415,15 @@ async function historyView(db, pid, view, { page, q, from, to }, profile) {
 
   const rows = results || [];
 
+  // Somewhere for the search box to get its suggestions. A native <datalist>
+  // means the browser does the matching, so this costs one capped query and no
+  // JavaScript at all.
+  const { results: places } = await db.prepare(
+    `SELECT DISTINCT location_text FROM entities
+     WHERE profile_id = ? AND location_text IS NOT NULL AND location_text <> ''
+     ORDER BY location_text LIMIT 200`
+  ).bind(pid).all();
+
   return `
 <div class="head">
   <h1>${esc(TITLES[view])}</h1>
@@ -420,9 +431,13 @@ async function historyView(db, pid, view, { page, q, from, to }, profile) {
 </div>
 
 <div class="filters">
-  <div>
+  <div class="fq">
     <label class="lb" for="q">Search</label>
-    <input id="q" type="search" value="${esc(q)}" placeholder="business or subject" data-filter="q">
+    <input id="q" type="search" value="${esc(q)}" list="places" data-filter="q"
+           placeholder="business, subject or location" autocomplete="off">
+    <datalist id="places">${
+      (places || []).map((r) => `<option value="${esc(r.location_text)}">`).join('')
+    }</datalist>
   </div>
   <div>
     <label class="lb" for="from">From</label>
@@ -570,15 +585,52 @@ function emptyFor(view, filtered) {
   return '<b>No bounces.</b><br>Addresses that turn out to be dead show up here.';
 }
 
+/**
+ * Numbered pagination.
+ *
+ * First and last are always reachable, the current page keeps two neighbours,
+ * and the gaps collapse to an ellipsis — so a hundred pages still fit on one
+ * line. A real <nav> with aria-current, because "page 6 of 100" is the kind of
+ * thing a screen reader has to be able to say.
+ */
+export function pageNumbers(current, pages, span = 2) {
+  const want = new Set([1, pages]);
+  for (let n = current - span; n <= current + span; n++) {
+    if (n >= 1 && n <= pages) want.add(n);
+  }
+  const sorted = [...want].sort((a, b) => a - b);
+  const out = [];
+  let previous = 0;
+  for (const n of sorted) {
+    // A gap standing in for exactly one page hides something clickable behind
+    // an ellipsis that is not. Show the page instead — it is the same width.
+    if (previous && n - previous === 2) out.push(previous + 1);
+    else if (previous && n - previous > 2) out.push('gap');
+    out.push(n);
+    previous = n;
+  }
+  return out;
+}
+
 function pager(current, pages) {
-  const link = (n, label, on) => on
-    ? `<button data-page="${n}">${label}</button>`
-    : `<button disabled>${label}</button>`;
-  return `<div class="pager">
-    ${link(current - 1, 'Previous', current > 1)}
-    <span class="dim">Page ${current} of ${pages}</span>
-    ${link(current + 1, 'Next', current < pages)}
-  </div>`;
+  if (pages <= 1) return '';
+  const step = (n, label, on) => on
+    ? `<button data-page="${n}">${esc(label)}</button>`
+    : `<button disabled>${esc(label)}</button>`;
+
+  const numbers = pageNumbers(current, pages).map((n) => n === 'gap'
+    ? '<span class="gap" aria-hidden="true">&hellip;</span>'
+    : (n === current
+      ? `<span class="pnum on" aria-current="page">${n}</span>`
+      : `<button class="pnum" data-page="${n}" aria-label="Go to page ${n}">${n}</button>`)
+  ).join('');
+
+  return `<nav class="pager" aria-label="Pagination">
+    ${step(current - 1, 'Previous', current > 1)}
+    <span class="pnums">${numbers}</span>
+    ${step(current + 1, 'Next', current < pages)}
+    <span class="dim vh">Page ${current} of ${pages}</span>
+  </nav>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -777,6 +829,9 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:18px}
   .filters input{font:inherit;font-size:13.5px;padding:8px 11px;border-radius:var(--r-s);
     border:1px solid var(--line);background:var(--c-2);color:var(--fg)}
+  /* Wide enough for a business name or "Portland, OR" without truncating. */
+  .fq{flex:1;min-width:260px;max-width:420px}
+  .fq input{width:100%}
   .lb{display:block;font-size:12px;color:var(--muted);margin:0 0 4px}
 
   button{font:inherit;font-size:13.5px;padding:8px 15px;border-radius:var(--r-s);cursor:pointer;
@@ -830,7 +885,20 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
          padding:14px 18px;box-shadow:var(--sh-s)}
   .lessons{margin:0;padding-left:18px} .lessons li{font-size:13.5px;margin:4px 0}
   .k{color:var(--muted);font-size:11.5px} .note{font-size:13.5px;margin:8px 0}
-  .pager{display:flex;gap:12px;align-items:center;margin-top:22px;font-size:13.5px}
+  .pager{display:flex;gap:10px;align-items:center;margin-top:22px;font-size:13.5px;flex-wrap:wrap}
+  .pnums{display:flex;gap:4px;align-items:center}
+  .pnum{min-width:34px;justify-content:center;padding:7px 9px;font-variant-numeric:tabular-nums}
+  .pnum.on{display:inline-flex;align-items:center;justify-content:center;min-width:34px;
+           padding:8px 9px;border-radius:var(--r-s);font-weight:650;
+           background:var(--p50);color:var(--p600);font-variant-numeric:tabular-nums}
+  :root:not([data-theme="light"]) .pnum.on{background:rgba(0,111,238,.18);color:var(--p300)}
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]) .pnum.on{background:rgba(0,111,238,.18);color:var(--p300)}
+  }
+  .pager .gap{color:var(--muted);padding:0 2px}
+  /* Announced, never shown: the page numbers alone do not say "of 20". */
+  .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);
+      white-space:nowrap}
 
   /* ---- metrics ------------------------------------------------------- */
   .seg{margin-left:auto;display:inline-flex;background:var(--c-2);border-radius:var(--r-m);padding:3px;gap:2px}
@@ -952,7 +1020,7 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
 ${body}
 </main>
 </div>
-<div class="flash" id="flash"></div>
+<div class="flash" id="flash" role="status" aria-live="polite"></div>
 
 <script nonce="${esc(nonce)}">
 // No key here. The session cookie is sent automatically and the URL stays
