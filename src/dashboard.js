@@ -675,6 +675,8 @@ function categoryRow(c) {
   </details>`;
 }
 
+const safeJson = (v) => { try { return JSON.parse(v); } catch { return null; } };
+
 function regionRow(r) {
   const dormant = r.kind === 'city' && r.country !== 'US' && !r.acknowledged_at;
   return `<div class="srow" data-rid="${esc(r.id)}">
@@ -697,19 +699,42 @@ function regionRow(r) {
 
 function settingsPanels({ profile, profiles, sending, env, categories = [], regions = [], metroCount = 0 }) {
   const rows = (profiles.length ? profiles : [profile]).map((p) => `
-    <div class="srow" data-pid="${esc(p.id)}">
-      <div>
-        <b>${esc(p.name)}</b>
+    <details class="cat" data-pid="${esc(p.id)}" data-pname="${esc(p.name)}">
+      <summary>
+        <span class="cname">${esc(p.name)}</span>
         ${p.id === profile.id ? '<span class="pill">open now</span>' : ''}
         ${p.is_default ? '<span class="pill strong">default</span>' : ''}
-        <div class="dim sm">/${esc(p.slug)}</div>
+        ${p.active ? '' : '<span class="pill weak">archived</span>'}
+        <span class="dim sm">/${esc(p.slug)}</span>
+      </summary>
+
+      <label class="lb" for="pn-${esc(p.id)}">Name</label>
+      <input id="pn-${esc(p.id)}" data-field="p-name" type="text" maxlength="80" value="${esc(p.name)}">
+
+      <label class="lb">Daily allowance for this profile</label>
+      <div class="quad">
+        ${['fetch', 'ai', 'source', 'browser'].map((k) => `<div>
+          <label class="lb sm" for="pb-${esc(p.id)}-${k}">${k}</label>
+          <input id="pb-${esc(p.id)}-${k}" data-field="p-${k}" type="number" min="0" step="1"
+                 value="${esc((safeJson(p.budgets) || {})[k] ?? '')}" placeholder="default">
+        </div>`).join('')}
       </div>
-      <div class="srow-acts">
-        ${p.is_default ? '' :
-          `<button data-act="make-default" data-pid="${esc(p.id)}">Make default</button>`}
-        <a class="ext" href="/?profile=${encodeURIComponent(p.slug)}">Open</a>
+      <p class="hint">Left blank, the deployment default applies. The daily SEND
+        cap is not here on purpose — one mailbox has one reputation, so it is
+        shared by every profile rather than counted per profile.</p>
+
+      <div class="acts">
+        <button class="go" data-act="save-profile" data-pid="${esc(p.id)}">Save</button>
+        ${p.is_default ? '' : `<button data-act="make-default" data-pid="${esc(p.id)}">Make default</button>`}
+        <a class="ext" href="/?profile=${encodeURIComponent(p.slug)}">Open it</a>
+        <button data-act="archive-profile" data-pid="${esc(p.id)}" data-active="${p.active ? '0' : '1'}">
+          ${p.active ? 'Archive' : 'Restore'}
+        </button>
+        <button class="danger" data-act="delete-profile" data-pid="${esc(p.id)}">Delete permanently</button>
       </div>
-    </div>`).join('');
+      <p class="hint">Archiving stops the crawl and hides it, and can be undone.
+        Deleting cannot: it destroys the leads and the record of what was sent.</p>
+    </details>`).join('');
 
   const cities = regions.filter((r) => r.kind === 'city');
   const blocks = regions.filter((r) => r.kind === 'block');
@@ -1107,6 +1132,9 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   .head .lead .ico{width:15px;height:15px}
 
   .pair{display:grid;grid-template-columns:1fr 90px;gap:10px}
+  .quad{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .quad .lb{text-transform:capitalize}
+  @media (max-width:640px){ .quad{grid-template-columns:repeat(2,1fr)} }
   .pri{width:64px;text-align:center;font-variant-numeric:tabular-nums;margin:0!important}
   .warn-box{border:1px solid color-mix(in srgb,var(--warn) 40%,var(--line));
       background:color-mix(in srgb,var(--warn) 8%,transparent);
@@ -1600,6 +1628,78 @@ document.addEventListener('click', async (ev) => {
       });
       flash('Saved — skips under the old definition will be sorted again');
       setTimeout(()=>location.reload(), 1100);
+    } catch(e){ b.disabled = false; flash(e.message); }
+    return;
+  }
+
+  if(b.dataset.act === 'save-profile'){
+    const box = b.closest('.cat');
+    const num = (k) => {
+      const v = box.querySelector('[data-field="p-' + k + '"]').value.trim();
+      return v === '' ? undefined : Number(v);
+    };
+    b.disabled = true;
+    try {
+      const r = await fetch('/api/profiles/' + b.dataset.pid, {
+        method:'PATCH', headers:{'content-type':'application/json'}, credentials:'same-origin',
+        body: JSON.stringify({
+          name: box.querySelector('[data-field="p-name"]').value,
+          budgets: {fetch:num('fetch'), ai:num('ai'), source:num('source'), browser:num('browser')},
+        }),
+      });
+      const d = await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error || 'could not save');
+      flash('Saved');
+      setTimeout(()=>location.reload(), 900);
+    } catch(e){ b.disabled = false; flash(e.message); }
+    return;
+  }
+
+  if(b.dataset.act === 'archive-profile'){
+    const on = b.dataset.active === '1';
+    if(!on && !(await askConfirm({
+      body: 'Archiving stops this profile crawling and hides it from the switcher. Nothing is deleted, and you can restore it here.',
+      confirmLabel: 'Archive it',
+    }))) return;
+    b.disabled = true;
+    try {
+      await post('/api/profiles/' + b.dataset.pid + '/archive', {active: on});
+      flash(on ? 'Restored' : 'Archived — nothing was deleted');
+      setTimeout(()=>location.reload(), 900);
+    } catch(e){ b.disabled = false; flash(e.message); }
+    return;
+  }
+
+  if(b.dataset.act === 'delete-profile'){
+    const box = b.closest('.cat');
+    const name = box.dataset.pname;
+    // Count first. "Are you sure?" is a question nobody can answer well;
+    // "this deletes 1,958 leads and 157 sent emails" is.
+    let f = {};
+    try {
+      const r = await fetch('/api/profiles/' + b.dataset.pid + '/footprint', {credentials:'same-origin'});
+      f = await r.json();
+    } catch(e){ /* the dialog still warns, just without the numbers */ }
+
+    const ok = await askConfirm({
+      body: 'This permanently deletes ' + (f.leads ?? '?') + ' leads and ' +
+            (f.sent ?? '?') + ' sent emails, along with every decision and lesson ' +
+            'this profile learned. It cannot be undone. Archiving instead keeps all of it.',
+      confirmLabel: 'Delete this',
+      requireText: name,
+    });
+    if(!ok) return;
+
+    b.disabled = true;
+    try {
+      const r = await fetch('/api/profiles/' + b.dataset.pid, {
+        method:'DELETE', headers:{'content-type':'application/json'}, credentials:'same-origin',
+        body: JSON.stringify({confirm_name: name}),
+      });
+      const d = await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error || 'could not delete');
+      flash('Deleted ' + d.deleted + ' — ' + d.leads + ' leads released');
+      setTimeout(()=>location.assign('/'), 1400);
     } catch(e){ b.disabled = false; flash(e.message); }
     return;
   }

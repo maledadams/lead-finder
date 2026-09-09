@@ -18,7 +18,8 @@ import { harvestWikipedia, mineCorpus, storeCandidates, validateBatch } from './
 import { queryCertTransparency } from './sources.js';
 import { deriveLessons, recordFeedback, rerankOne } from './learning.js';
 import {
-  createProfile, listProfiles, resolveProfile, setDefaultProfile,
+  archiveProfile, createProfile, deleteProfile, listProfiles, profileFootprint,
+  resolveProfile, setDefaultProfile, updateProfile,
 } from './profiles.js';
 import { calConfigured, upcomingBookings } from './cal.js';
 import {
@@ -935,6 +936,39 @@ export default {
       if (asDefault && request.method === 'POST') {
         const res = await setDefaultProfile(db, asDefault[1]);
         return json(res, res.ok ? 200 : 404);
+      }
+
+      // What deleting it would cost, so the confirmation can say the numbers
+      // rather than ask an unanswerable "are you sure?".
+      const footprint = url.pathname.match(/^\/api\/profiles\/([\w-]+)\/footprint$/);
+      if (footprint && request.method === 'GET') {
+        return json(await profileFootprint(db, footprint[1]));
+      }
+
+      const archive = url.pathname.match(/^\/api\/profiles\/([\w-]+)\/archive$/);
+      if (archive && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const res = await archiveProfile(db, archive[1], { active: body.active === true });
+        return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 409));
+      }
+
+      const editProfile = url.pathname.match(/^\/api\/profiles\/([\w-]+)$/);
+      if (editProfile && request.method === 'PATCH') {
+        const body = await request.json().catch(() => ({}));
+        const res = await updateProfile(db, editProfile[1], body);
+        return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 400));
+      }
+
+      // The only irreversible operation in the system. The typed name is
+      // checked server-side as well as in the dialog: a confirmation that only
+      // exists in the browser is not a confirmation.
+      if (editProfile && request.method === 'DELETE') {
+        const body = await request.json().catch(() => ({}));
+        if (typeof body.confirm_name !== 'string') {
+          return json({ error: 'confirm_name is required' }, 400);
+        }
+        const res = await deleteProfile(db, editProfile[1], { confirmName: body.confirm_name });
+        return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 409));
       }
 
       // ---- calendar (shared across profiles) ----------------------------

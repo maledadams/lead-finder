@@ -304,6 +304,159 @@ export async function setDefaultProfile(db, id) {
   return { ok: true };
 }
 
+/**
+ * What deleting this profile would destroy, counted before anything is touched.
+ *
+ * The confirmation says these numbers out loud. "Delete profile?" is a question
+ * nobody can answer well; "this deletes 1,958 leads and 157 sent emails" is.
+ */
+export async function profileFootprint(db, id) {
+  const row = await db.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM entities WHERE profile_id = ?1) AS leads,
+       (SELECT COUNT(*) FROM outreach WHERE profile_id = ?1 AND status = 'SENT') AS sent,
+       (SELECT COUNT(*) FROM outreach WHERE profile_id = ?1) AS drafts,
+       (SELECT COUNT(*) FROM feedback WHERE profile_id = ?1) AS decisions,
+       (SELECT COUNT(*) FROM lessons  WHERE profile_id = ?1) AS lessons`
+  ).bind(id).first();
+  return {
+    leads: row?.leads || 0,
+    sent: row?.sent || 0,
+    drafts: row?.drafts || 0,
+    decisions: row?.decisions || 0,
+    lessons: row?.lessons || 0,
+  };
+}
+
+/**
+ * Stop a profile without destroying it.
+ *
+ * This is the button that should almost always be pressed instead of delete: it
+ * disappears from the switcher and from the crawl, and nothing is lost. The
+ * only irreversible thing here should be the one that says it is.
+ */
+export async function archiveProfile(db, id, { active = false } = {}) {
+  const others = await db.prepare(
+    'SELECT COUNT(*) AS n FROM profiles WHERE active = 1 AND id <> ?'
+  ).bind(id).first();
+  if (!active && !(others?.n)) {
+    return { ok: false, error: 'this is the only active profile — there would be nowhere to work' };
+  }
+
+  const res = await db.prepare('UPDATE profiles SET active = ?, updated_at = ? WHERE id = ?')
+    .bind(active ? 1 : 0, nowIso(), id).run();
+  if (!res?.meta?.changes) return { ok: false, error: 'not-found' };
+
+  // An archived profile must not stay the default, or the next visit resolves
+  // to something that is no longer running.
+  if (!active) {
+    const wasDefault = await db.prepare('SELECT is_default FROM profiles WHERE id = ?').bind(id).first();
+    if (wasDefault?.is_default) {
+      const heir = await db.prepare(
+        'SELECT id FROM profiles WHERE active = 1 AND id <> ? ORDER BY created_at LIMIT 1'
+      ).bind(id).first();
+      if (heir) await setDefaultProfile(db, heir.id);
+    }
+  }
+  return { ok: true, active: Boolean(active) };
+}
+
+/**
+ * Delete a profile and everything that belongs to it. There is no undo.
+ *
+ * TWO THINGS MATTER HERE beyond the obvious.
+ *
+ * The order is explicit rather than left to ON DELETE CASCADE. The cascade
+ * would probably do the right thing; "probably" is not a word that belongs
+ * anywhere near the only irreversible operation in the system.
+ *
+ * entity_keys is released deliberately. Those rows are globally unique and are
+ * what stops two profiles pitching the same business. Leave them behind and
+ * every business this profile ever found becomes permanently undiscoverable by
+ * every other profile — the database would keep enforcing a claim on behalf of
+ * something that no longer exists.
+ */
+export async function deleteProfile(db, id, { confirmName = null } = {}) {
+  const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').bind(id).first();
+  if (!profile) return { ok: false, error: 'not-found' };
+
+  if (confirmName !== null && String(confirmName).trim() !== profile.name) {
+    return { ok: false, error: 'the name did not match — nothing was deleted' };
+  }
+
+  const others = await db.prepare(
+    'SELECT COUNT(*) AS n FROM profiles WHERE id <> ?'
+  ).bind(id).first();
+  if (!others?.n) return { ok: false, error: 'this is the only profile — deleting it leaves nothing' };
+
+  const footprint = await profileFootprint(db, id);
+  const sub = 'SELECT id FROM entities WHERE profile_id = ?';
+
+  // Children of entities first, then the entities, then everything scoped
+  // directly to the profile, then the profile itself.
+  const steps = [
+    `DELETE FROM entity_keys  WHERE entity_id IN (${sub})`,
+    `DELETE FROM snapshots    WHERE entity_id IN (${sub})`,
+    `DELETE FROM evaluations  WHERE entity_id IN (${sub})`,
+    `DELETE FROM feedback     WHERE entity_id IN (${sub})`,
+    `DELETE FROM outreach     WHERE entity_id IN (${sub})`,
+    'DELETE FROM entities        WHERE profile_id = ?',
+    'DELETE FROM crawl_frontier  WHERE profile_id = ?',
+    'DELETE FROM keywords        WHERE profile_id = ?',
+    'DELETE FROM source_cursor   WHERE profile_id = ?',
+    'DELETE FROM budget          WHERE profile_id = ?',
+    'DELETE FROM lessons         WHERE profile_id = ?',
+    'DELETE FROM runs            WHERE profile_id = ?',
+    'DELETE FROM feedback        WHERE profile_id = ?',
+    'DELETE FROM outreach        WHERE profile_id = ?',
+    'DELETE FROM skip_categories WHERE profile_id = ?',
+    'DELETE FROM regions         WHERE profile_id = ?',
+    'DELETE FROM profiles        WHERE id = ?',
+  ];
+  await db.batch(steps.map((sql) => db.prepare(sql).bind(id)));
+
+  // Something has to be the default afterwards.
+  const stillDefault = await db.prepare(
+    'SELECT COUNT(*) AS n FROM profiles WHERE is_default = 1 AND active = 1'
+  ).first();
+  if (!stillDefault?.n) {
+    const heir = await db.prepare(
+      'SELECT id FROM profiles WHERE active = 1 ORDER BY created_at LIMIT 1'
+    ).first();
+    if (heir) await setDefaultProfile(db, heir.id);
+  }
+
+  return { ok: true, deleted: profile.name, ...footprint };
+}
+
+/** Rename, and adjust the per-profile crawl allowance. */
+export async function updateProfile(db, id, { name, budgets }) {
+  const sets = [];
+  const args = [];
+  if (name !== undefined) {
+    const clean = String(name || '').trim().slice(0, 80);
+    if (clean.length < 2) return { ok: false, error: 'give the profile a name' };
+    sets.push('name = ?');
+    args.push(clean);
+  }
+  if (budgets !== undefined) {
+    const out = {};
+    for (const k of ['fetch', 'ai', 'source', 'browser']) {
+      const v = Number(budgets?.[k]);
+      if (Number.isFinite(v) && v >= 0) out[k] = Math.min(Math.round(v), 100000);
+    }
+    sets.push('budgets = ?');
+    args.push(Object.keys(out).length ? JSON.stringify(out) : null);
+  }
+  if (!sets.length) return { ok: false, error: 'nothing to change' };
+
+  sets.push('updated_at = ?');
+  args.push(nowIso(), id);
+  const res = await db.prepare(`UPDATE profiles SET ${sets.join(', ')} WHERE id = ?`)
+    .bind(...args).run();
+  return res?.meta?.changes ? { ok: true } : { ok: false, error: 'not-found' };
+}
+
 /** Per-profile daily crawl allowance, falling back to the deployment default. */
 export function budgetsFor(profile, env) {
   const b = profile?.budgets || {};
