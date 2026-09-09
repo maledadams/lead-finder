@@ -315,8 +315,8 @@ function card(r, CAN_SEND = false, profile = null) {
       what to stop putting in front of you.</div>
     <textarea data-field="reason" placeholder="e.g. their site is already great and there is no obvious system to build"></textarea>
     <div class="acts">
-      <button class="no" data-act="skip">Skip this one</button>
-      <button data-act="block">Never contact them</button>
+      <button class="no" data-act="skip" disabled>Skip this one</button>
+      <button data-act="block" disabled>Never contact them</button>
     </div>
   </div>`}
 </div>`;
@@ -354,7 +354,7 @@ function bounceDrawer() {
       one turns up.</div>
     <textarea data-field="note" placeholder="e.g. mailer-daemon: 550 user unknown"></textarea>
     <div class="acts">
-      <button class="no" data-act="bounce">Mark it bounced</button>
+      <button class="no" data-act="bounce" disabled>Mark it bounced</button>
     </div>
   </div>`;
 }
@@ -450,10 +450,10 @@ ${pages > 1 ? pager(current, pages) : ''}
  * this send are and a correction is a fact about this send.
  */
 function noteControl() {
-  return `<span class="notes"><span class="nlab">Notes:</span><input class="npill"
-      data-field="note" placeholder="what did it get wrong?" maxlength="200"
-      autocomplete="off" aria-label="Correct this record"><button class="nsend"
-      data-act="note" title="Send this note">Send note</button></span>`;
+  return `<span class="notes"><span class="nlab">Notes<span class="opt">(optional)</span></span><input class="npill"
+      data-field="correction" placeholder="optional — what did it get wrong?" maxlength="200"
+      autocomplete="off" aria-label="Correct this record (optional)"><button class="nsend"
+      data-act="note" title="Optional. Send a correction or a judgement">Send note</button></span>`;
 }
 
 function historyRow(r, view) {
@@ -798,6 +798,7 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   .row .notes{flex:0 1 auto;min-width:0;justify-content:flex-end}
   .row .npill{flex:0 1 230px;min-width:150px}
   .nlab{font-size:12.5px;color:var(--muted);white-space:nowrap}
+  .opt{margin-left:4px;font-size:11px;opacity:.75}
   .nsend{padding:6px 13px;border-radius:99px;font-size:12.5px;white-space:nowrap;flex:none}
   .npill{font:inherit;font-size:13px;padding:6px 13px;border-radius:99px;
          flex:1;min-width:180px;
@@ -973,7 +974,13 @@ async function post(path, body){
   return data;
 }
 const holder = (el) => el.closest('.card, .row');
-const field = (el, name) => holder(el).querySelector('[data-field="' + name + '"]');
+
+// A button inside a drawer reads the field in ITS drawer, not the first one that
+// happens to appear in the row. On the Sent page the optional notes pill sits
+// above the bounce drawer and answered to the same name, so "Mark it bounced"
+// was reading the empty notes box and refusing what you had just typed.
+const field = (el, name) =>
+  (el.closest('.drawer') || holder(el)).querySelector('[data-field="' + name + '"]');
 
 // The filter bar cannot be a <form>: the CSP sets form-action 'none' so that a
 // hostile lead name can never become a submission target. Navigating by hand
@@ -1016,6 +1023,21 @@ async function sendNote(el){
     setTimeout(()=>location.reload(), 1800);
   } catch(e){ el.disabled = false; flash(e.message); }
 }
+
+// A drawer's buttons stay disabled until its box says something. The reason and
+// the bounce notice are both required by the API, and a button that looks ready
+// and then refuses you is worse than one that waits.
+function gateDrawer(ta){
+  const d = ta.closest('.drawer');
+  if(!d) return;
+  const ready = (ta.value || '').trim().length >= 4;
+  for(const b of d.querySelectorAll('.acts button[data-act]')) b.disabled = !ready;
+}
+document.addEventListener('input', (ev) => {
+  if(ev.target.matches('.drawer textarea[data-field="reason"], .drawer textarea[data-field="note"]')){
+    gateDrawer(ev.target);
+  }
+});
 
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter' && ev.target.classList?.contains('npill')) {

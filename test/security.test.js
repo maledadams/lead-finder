@@ -106,3 +106,41 @@ test('the favicon data URI cannot break out of its attribute', async () => {
   assert.ok(!/["']\s*>\s*["']/.test(head), 'no attribute-breakout debris in the head');
   assert.ok(!head.includes('<svg'), 'the svg must stay inside the data URI, not in the markup');
 });
+
+/**
+ * Two inputs in one row must never answer to the same name.
+ *
+ * On the Sent page the optional notes pill and the bounce drawer's textarea were
+ * both data-field="note", and the page finds a field with querySelector — so
+ * "Mark it bounced" read whichever came first in the markup, which was the empty
+ * notes box. The bounce you had just typed was refused as blank.
+ */
+test('no two fields in one row share a name', async () => {
+  const { renderDashboard } = await import('../src/dashboard.js');
+  const rows = [{
+    oid: 'o1', eid: 'e1', subject: 's', body: 'b', status: 'SENT',
+    queue_date: '2026-09-08', sent_at: '2026-09-08T10:00:00Z', sent_via: 'zoho',
+    display_name: 'Marlowe', domain: 'marlowe.com', contact_email: 'hi@marlowe.com',
+    niche: 'craft_goods', response_status: null, reason: null,
+  }];
+  const db = {
+    prepare: () => {
+      const first = async () => ({ todo: 0, sent: 1, skipped: 0, bounced: 0, contacted: 0, n: 1 });
+      const all = async () => ({ results: rows });
+      return { first, all, bind: () => ({ first, all }) };
+    },
+  };
+  const html = await renderDashboard(db, {}, {
+    view: 'sent', nonce: 'n', day: '2026-09-08', page: 1, q: '', from: null, to: null,
+    profile: { id: 'p-creative', slug: 'creative', name: 'Creative', niches: {} },
+    profiles: [{ id: 'p-creative', slug: 'creative', name: 'Creative', is_default: 1 }],
+  });
+
+  // Markup only. The page's own script mentions these names in a selector, and
+  // matching those would make this test fail on its own fix.
+  const markup = html.slice(html.indexOf('<div class="row" data-oid'), html.lastIndexOf('<script'));
+  const names = [...markup.matchAll(/data-field="([a-z]+)"/g)].map((m) => m[1]);
+  assert.ok(names.includes('note'), 'the bounce drawer still has its field');
+  assert.ok(names.includes('correction'), 'the notes pill has its own');
+  assert.deepEqual([...new Set(names)], names, `a name is used twice: ${names}`);
+});
