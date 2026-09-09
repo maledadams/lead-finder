@@ -74,14 +74,17 @@ MAX_RUN_SECONDS = "120"
 NO_SITE_BATCH = "40"
 # Browser Rendering is metered. Only JS-rendered pages escalate to it.
 DAILY_BROWSER_RENDERS = "30"
-DAILY_SOURCE_QUERIES = "24"
+DAILY_SOURCE_QUERIES = "40"
+# How many city boxes one crawl pass sweeps. There are now 1,100+ of them
+# covering every state, so this is what decides how fast the country is walked:
+# 4 per pass x 3 crawl passes a day = 12 cities a day per profile.
+SOURCE_METROS_PER_RUN = "4"
 KEYWORDS_VALIDATED_PER_RUN = "8"
 SOURCE_KEYWORDS_PER_RUN = "5"
-SOURCE_METROS_PER_RUN = "4"
 FRONTIER_LOW_WATER = "150"
 MIN_SCORE_TO_QUEUE = "68"      # the recommended line, not a hard gate
 ABSOLUTE_FLOOR = "35"          # below this a lead is genuinely not worth a look
-SKIP_COOLDOWN_DAYS = "45"      # a skipped lead does not reappear before this          # below this a lead is genuinely not worth a look
+SKIP_COOLDOWN_DAYS = "45"      # a skipped lead does not reappear before this
 MIN_PRESCORE_FOR_AI = "45"
 RE_EVAL_AFTER_DAYS = "45"
 # Set to "true" once the Worker is behind Cloudflare Access on a custom

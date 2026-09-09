@@ -50,74 +50,14 @@ const OVERPASS_TIMEOUT_MS = 45_000;
 const OVERPASS_UA = 'LeadFinderBot/0.1';
 
 /**
- * US metros, ordered by how dense they are in the kind of business Lucia
- * wants rather than by population. Each entry is [south, west, north, east].
+ * Where to look. Grouped by state in metros.js, walked as one interleaved list.
+ *
+ * Re-exported here because this module is where the OSM query lives and every
+ * caller already imports from it. The list itself is 1,100+ boxes covering all
+ * fifty states, which is a data file rather than something to read in the middle
+ * of the query builder.
  */
-export const METROS = [
-  ['portland-or',    [45.43, -122.84, 45.65, -122.47]],
-  ['brooklyn-ny',    [40.62, -74.05, 40.74, -73.86]],
-  ['los-angeles-ca', [33.98, -118.50, 34.15, -118.18]],
-  ['austin-tx',      [30.19, -97.83, 30.40, -97.66]],
-  ['oakland-ca',     [37.75, -122.32, 37.86, -122.16]],
-  ['seattle-wa',     [47.53, -122.42, 47.70, -122.24]],
-  ['chicago-il',     [41.85, -87.72, 41.98, -87.58]],
-  ['nashville-tn',   [36.11, -86.85, 36.22, -86.70]],
-  ['philadelphia-pa',[39.92, -75.24, 40.02, -75.12]],
-  ['richmond-va',    [37.50, -77.53, 37.60, -77.40]],
-  ['providence-ri',  [41.79, -71.46, 41.86, -71.37]],
-  ['minneapolis-mn', [44.93, -93.32, 45.03, -93.21]],
-  ['denver-co',      [39.68, -105.02, 39.79, -104.90]],
-  ['atlanta-ga',     [33.72, -84.42, 33.81, -84.33]],
-  ['new-orleans-la', [29.91, -90.13, 30.00, -90.02]],
-  ['santa-fe-nm',    [35.63, -106.00, 35.71, -105.90]],
-  ['asheville-nc',   [35.54, -82.61, 35.62, -82.52]],
-  ['savannah-ga',    [32.02, -81.13, 32.10, -81.06]],
-  ['burlington-vt',  [44.44, -73.24, 44.51, -73.18]],
-  ['pittsburgh-pa',  [40.42, -80.03, 40.48, -79.92]],
-  ['detroit-mi',     [42.32, -83.12, 42.40, -82.98]],
-  ['san-diego-ca',   [32.70, -117.19, 32.79, -117.11]],
-  ['boston-ma',      [42.33, -71.13, 42.39, -71.03]],
-  ['bozeman-mt',     [45.65, -111.09, 45.71, -111.00]],
-  ['hudson-ny',      [42.23, -73.80, 42.26, -73.76]],
-  ['marfa-tx',       [30.28, -104.04, 30.32, -103.99]],
-  // Second wave. Creative-dense but smaller, and neighbourhoods of the big
-  // metros that a single city-wide box under-samples.
-  ['los-angeles-east',[34.05, -118.28, 34.13, -118.16]],   // Highland Park, Eagle Rock
-  ['brooklyn-north', [40.69, -73.97, 40.73, -73.91]],      // Bushwick, Ridgewood
-  ['queens-nyc',     [40.73, -73.96, 40.78, -73.88]],
-  ['manhattan-low',  [40.71, -74.01, 40.75, -73.98]],
-  ['san-francisco',  [37.74, -122.46, 37.80, -122.39]],
-  ['berkeley-ca',    [37.85, -122.30, 37.89, -122.25]],
-  ['san-antonio-tx', [29.40, -98.52, 29.47, -98.45]],
-  ['houston-tx',     [29.72, -95.42, 29.79, -95.34]],
-  ['dallas-tx',      [32.77, -96.82, 32.82, -96.76]],
-  ['phoenix-az',     [33.44, -112.09, 33.50, -112.03]],
-  ['tucson-az',      [32.20, -110.99, 32.25, -110.93]],
-  ['salt-lake-ut',   [40.74, -111.91, 40.78, -111.86]],
-  ['boise-id',       [43.59, -116.23, 43.64, -116.17]],
-  ['kansas-city-mo', [39.07, -94.60, 39.12, -94.55]],
-  ['st-louis-mo',    [38.60, -90.27, 38.65, -90.21]],
-  ['milwaukee-wi',   [43.02, -87.93, 43.07, -87.88]],
-  ['columbus-oh',    [39.94, -83.02, 39.99, -82.97]],
-  ['cleveland-oh',   [41.48, -81.71, 41.52, -81.66]],
-  ['louisville-ky',  [38.24, -85.77, 38.27, -85.72]],
-  ['memphis-tn',     [35.13, -90.06, 35.17, -90.01]],
-  ['birmingham-al',  [33.50, -86.83, 33.54, -86.78]],
-  ['charleston-sc',  [32.77, -79.95, 32.81, -79.92]],
-  ['durham-nc',      [35.98, -78.92, 36.02, -78.88]],
-  ['baltimore-md',   [39.28, -76.64, 39.33, -76.58]],
-  ['washington-dc',  [38.89, -77.05, 38.93, -76.99]],
-  ['jersey-city-nj', [40.71, -74.09, 40.75, -74.03]],
-  ['portland-me',    [43.65, -70.28, 43.68, -70.24]],
-  ['northampton-ma', [42.31, -72.65, 42.34, -72.61]],
-  ['ithaca-ny',      [42.42, -76.51, 42.46, -76.47]],
-  ['madison-wi',     [43.06, -89.41, 43.09, -89.36]],
-  ['eugene-or',      [44.03, -123.11, 44.07, -123.06]],
-  ['olympia-wa',     [47.03, -122.92, 47.06, -122.88]],
-  ['taos-nm',        [36.38, -105.60, 36.42, -105.56]],
-  ['joshua-tree-ca', [34.11, -116.33, 34.16, -116.27]],
-  ['beacon-ny',      [41.49, -73.99, 41.52, -73.95]],
-];
+export { METROS, METROS_BY_STATE } from './metros.js';
 
 /**
  * Categories worth pulling. Deliberately excludes supermarkets, chains,
@@ -274,7 +214,9 @@ function buildQuery([s, w, n, e], spec) {
     clauses.push(`nwr["${field}"~"^(${alt})$"]["name"][!"website"]${reachable}(${bbox});`);
   }
   if (!clauses.length) return null;
-  return `[out:json][timeout:50];(${clauses.join('')});out center 400;`;
+  // 700, not 400: the boxes now cover a whole city rather than a downtown block,
+  // and a truncated answer is indistinguishable from a thin one.
+  return `[out:json][timeout:50];(${clauses.join('')});out center 700;`;
 }
 
 /**
@@ -481,7 +423,12 @@ export async function nextMetros(db, profileId, limit, staleAfterHours = 20, met
   const seen = new Map((results || []).map((r) => [r.keyword, r.last_run_at]));
   const cutoff = new Date(Date.now() - staleAfterHours * 3600_000).toISOString();
 
-  return METROS
+  // The profile's own geography when it defines one, otherwise the national
+  // list. This argument was being accepted and ignored, so a profile that
+  // restricted itself to a few cities was silently swept nationwide.
+  const list = Array.isArray(metros) && metros.length ? metros : METROS;
+
+  return list
     .map(([metro, bbox]) => ({ metro, bbox, key: `osm:${metro}`, last: seen.get(`osm:${metro}`) || '' }))
     .filter((m) => !m.last || m.last < cutoff)
     .sort((a, b) => a.last.localeCompare(b.last))

@@ -53,8 +53,29 @@ const ICONS = {
   bounced: '<path d="M8.2 3.6 3.4 8.4l4.8 4.8"/><path d="M3.4 8.4h11.2a5.9 5.9 0 0 1 5.9 5.9v6.1"/>',
   metrics: '<path d="M4 20h16"/><path d="M7.6 20v-7.4"/><path d="M12 20V6.6"/><path d="M16.4 20v-4.6"/>',
   calendar: '<rect x="3.5" y="5.8" width="17" height="14.7" rx="3.2"/><path d="M8.2 3v4M15.8 3v4M3.5 10.6h17"/>',
+  globe: '<circle cx="12" cy="12" r="8.6"/><path d="M3.4 12h17.2"/>'
+    + '<path d="M12 3.4c2.25 2.4 3.5 5.4 3.5 8.6s-1.25 6.2-3.5 8.6c-2.25-2.4-3.5-5.4-3.5-8.6S9.75 5.8 12 3.4z"/>',
+  instagram: '<rect x="3.6" y="3.6" width="16.8" height="16.8" rx="5"/><circle cx="12" cy="12" r="4.1"/>'
+    + '<circle cx="16.85" cy="7.15" r="1.05" fill="currentColor" stroke="none"/>',
   glass: '<circle cx="10.8" cy="10.8" r="6.9"/><path d="M15.9 15.9 21 21"/>',
 };
+
+/**
+ * Their website and their Instagram, wherever a business appears.
+ *
+ * Icon plus word rather than icon alone: a globe on its own is guessable, and
+ * these are links a person clicks in a hurry. The label carries the meaning and
+ * the icon makes it findable.
+ */
+function siteLinks(r) {
+  return `${r.website
+    ? `<a class="ext" href="${esc(r.website)}" target="_blank" rel="noopener noreferrer">${
+        icon('globe')}<span>Their website</span></a>`
+    : ''}${r.instagram
+    ? `<a class="ext" href="https://instagram.com/${esc(r.instagram)}" target="_blank" rel="noopener noreferrer">${
+        icon('instagram')}<span>Instagram</span></a>`
+    : ''}`;
+}
 
 const icon = (name) =>
   `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"`
@@ -256,8 +277,7 @@ function card(r, CAN_SEND = false, profile = null) {
   <div class="dim sm">${esc(niche)}${money ? ` &middot; ${esc(money)}` : ''}</div>
 
   <div class="links">
-    ${r.website ? `<a href="${esc(r.website)}" target="_blank" rel="noopener noreferrer">Their website</a>` : ''}
-    ${r.instagram ? `<a href="https://instagram.com/${esc(r.instagram)}" target="_blank" rel="noopener noreferrer">Instagram</a>` : ''}
+    ${siteLinks(r)}
     ${r.contact_email
       ? `<span class="dim">${esc(r.contact_email)}</span>`
       : '<span class="warn">no address on file</span>'}
@@ -379,7 +399,7 @@ async function historyView(db, pid, view, { page, q, from, to }, profile) {
   const { results } = await db.prepare(
     `SELECT o.id AS oid, o.subject, o.body, o.status, o.queue_date, o.sent_at,
             o.bounced_at, o.sent_via, o.send_error, o.edited_at,
-            e.id AS eid, e.display_name, e.domain, e.website, e.location_text,
+            e.id AS eid, e.display_name, e.domain, e.website, e.instagram, e.location_text,
             e.contact_email, e.niche, e.response_status,
             (SELECT f.reason FROM feedback f WHERE f.outreach_id = o.id
               ORDER BY f.created_at DESC LIMIT 1) AS reason,
@@ -451,24 +471,24 @@ function historyRow(r, view) {
     </div>
     <div class="dim sm subj">${esc(r.subject)}</div>
     <div class="links sm">
+      ${siteLinks(r)}
       ${r.contact_email ? `<span class="dim">${esc(r.contact_email)}</span>` : '<span class="warn">no address on file</span>'}
       <button class="link" data-open="email">${r.contact_email ? 'change' : 'add an address'}</button>
     </div>
     ${emailDrawer(r)}
     ${view === 'skipped' && r.reason ? `<div class="why sm"><b>Reason:</b> ${esc(r.reason)}</div>` : ''}
     ${view === 'bounced' && r.send_error ? `<div class="why sm"><b>Bounce:</b> ${esc(r.send_error)}</div>` : ''}
-    ${rowActions(r, view)}
   </div>
   <div class="rmeta">
     <div class="when">${esc(short(when))}</div>
     ${view === 'sent' && r.sent_via ? `<div class="dim sm">via ${esc(r.sent_via)}</div>` : ''}
     ${view === 'sent' && r.contact_email ? `<div class="dim sm">${esc(r.contact_email)}</div>` : ''}
-    ${noteControl()}
   </div>
   <details class="wide">
     <summary>The email</summary>
     <div class="mail">${esc(r.body)}</div>
   </details>
+  ${rowActions(r, view)}
 </div>`;
 }
 
@@ -526,17 +546,20 @@ function rowActions(r, view) {
       ${btn('GHOSTED', 'Ghosted')}
       ${st ? '<button data-act="status" data-status="">Clear</button>' : ''}
       <button class="no" data-open="bounce">It bounced&hellip;</button>
+      ${noteControl()}
     </div>${bounceDrawer()}`;
   }
   if (view === 'skipped') {
     return `<div class="acts">
       <button data-act="revive">Edit &amp; put back in the queue</button>
+      ${noteControl()}
     </div>`;
   }
   // bounced: only offer the requeue once there is somewhere to send it.
   return `<div class="acts">
     <button data-act="revive"${r.contact_email ? '' : ' disabled'}>Edit &amp; put back in the queue</button>
     ${r.contact_email ? '' : '<span class="dim sm">needs an address first</span>'}
+    ${noteControl()}
   </div>`;
 }
 
@@ -660,6 +683,11 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   .brand .ico{color:var(--accent);width:18px;height:18px}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);flex:none}
   .ico{width:17px;height:17px;flex:none}
+  /* An outbound link: icon and label as one target, the icon in the accent so
+     it reads as a link without the label having to be coloured. */
+  .ext{display:inline-flex;align-items:center;gap:5px;text-decoration:none}
+  .ext:hover span{text-decoration:underline;text-underline-offset:2px}
+  .ext .ico{width:15px;height:15px;color:var(--accent)}
 
   /* Profile switcher. Switching is switching account, so it sits above the
      navigation rather than beside the sign-out line. */
@@ -737,16 +765,12 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   .rmain{min-width:0} .subj{margin-top:2px}
   .rmeta{display:flex;flex-direction:column;align-items:flex-end;gap:3px;
          text-align:right;white-space:nowrap}
-  /* The note field stays in this column, under the date and the address, but
-     drops to the bottom of it so it lines up with the row's buttons rather than
-     hanging off the date. An auto top margin in a stretched grid cell does that,
-     and it needs no knowledge of how tall the row happens to be. */
-  .rmeta .notes{margin-top:auto;width:auto}
-  .rmeta .npill{flex:0 1 180px;min-width:130px}
-
-  /* The email reads at the width it does on Today: across the whole row rather
-     than inside the left column, which the date and note column was narrowing. */
+  /* The email, then the buttons, each across the whole row. Inside the left
+     column the email was being narrowed by the date beside it, and the buttons
+     could not share a line with the note field. */
   .row>details.wide{grid-column:1/-1;margin:2px 0 0}
+  .row>.acts,.row>.drawer{grid-column:1/-1}
+  .row>.acts{margin-top:8px}
   .when{font-size:13px;font-variant-numeric:tabular-nums}
   .row .pill{margin-left:0}
 

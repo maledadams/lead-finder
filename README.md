@@ -261,12 +261,33 @@ Everything else is separate, and the test suite asserts it rather than claiming
 it: `test/isolation.test.js` gives both profiles data at once and checks that
 each page shows one profile's rows and none of the other's.
 
-### Discovery does not collide
+### Where it looks
 
-Two profiles hunting the same cities would race for the same businesses, and
-since the first finder owns one, the loser would spend its budget rediscovering
-leads it cannot have. So a profile brings its own metro list and its own map
-tags. The two profiles that ship have no city in common.
+`src/metros.js` covers **all fifty states and DC — 1,123 bounding boxes**,
+grouped by state so coverage is something you can read rather than infer.
+
+- Box size follows population: a small town is about 9 km across, a large city
+  about 22 km, and longitude is scaled by `1/cos(latitude)` so a box in Anchorage
+  covers the same ground as one in Miami.
+- The nineteen biggest cities are split into grids — New York, Los Angeles,
+  Chicago, Houston, Philadelphia and Phoenix are 3×3. One box over New York City
+  would be too coarse to mean anything *and* large enough that Overpass truncates
+  the answer, silently capping the whole city at whatever came back first.
+- The list is walked **round-robin across states**, not alphabetically, so the
+  first day of crawling already covers several states rather than spending its
+  first month inside Alabama.
+- Coordinates come from a public dataset of the ~1,000 largest municipalities,
+  plus 42 towns geocoded through OpenStreetMap to fill out Alaska, Hawaii,
+  Vermont, the Dakotas and the other states that dataset barely reaches. None
+  were typed from memory, which is why no box sits in the ocean.
+
+At the default four boxes per crawl pass and three passes a day, each profile
+sweeps twelve cities a day and works through the country in about three months.
+Raise `SOURCE_METROS_PER_RUN` to go faster.
+
+Both profiles search everywhere. Their map tags barely overlap — a dental clinic
+is never a pottery studio — so they compete for map squares rather than for
+businesses, and coverage is worth more than the few duplicate queries it costs.
 
 ## Making it yours: the part that is not configuration
 
@@ -283,7 +304,7 @@ falls back to, and these are the files that define it.
 | `src/outreach.js` → `FIX` | What fixing each kind of problem actually involves |
 | `src/ai.js` → `SYSTEM` | The fallback scoring brief |
 | `src/score.js` | Deterministic weights and hard vetoes — shared by every profile |
-| `src/osm.js` → `METROS` | The fallback metro list |
+| `src/metros.js` | Where to look — all fifty states, grouped by state |
 
 The three sentences every email carries whatever the profile — what you build,
 how you build it, and the booking link — live in `src/outreach.js` as

@@ -41,13 +41,39 @@ test('toCandidates drops chains, dedupes domains, keeps US address', () => {
 });
 
 test('metro bboxes are well formed', () => {
-  assert.ok(METROS.length >= 20);
+  assert.ok(METROS.length >= 1000, 'the whole country, not a handful of cities');
   for (const [name, [s, w, n, e]] of METROS) {
     assert.ok(s < n, `${name}: south must be below north`);
     assert.ok(w < e, `${name}: west must be left of east`);
-    assert.ok(s > 24 && n < 50, `${name}: latitude outside the continental US`);
-    assert.ok(w > -125 && e < -66, `${name}: longitude outside the continental US`);
+    // Alaska and Hawaii included, so this is the whole country rather than the
+    // lower 48. A box in the sea is the failure this is really guarding against.
+    assert.ok(s > 18 && n < 72, `${name}: latitude outside the United States`);
+    assert.ok(w > -180 && e < -66, `${name}: longitude outside the United States`);
+    // A box wider than about 40 km means Overpass will truncate the answer.
+    assert.ok(n - s < 0.45, `${name}: box too tall — Overpass would truncate`);
   }
+});
+
+test('every state is somewhere in the list', async () => {
+  const { METROS_BY_STATE } = await import('../src/metros.js');
+  const states = Object.keys(METROS_BY_STATE);
+  assert.equal(states.length, 51, 'fifty states and the District of Columbia');
+  for (const st of states) {
+    assert.ok(METROS_BY_STATE[st].length >= 1, `${st} has no cities`);
+    // Every box must carry its state, so a metro key says where it is.
+    for (const [name] of METROS_BY_STATE[st]) {
+      assert.ok(new RegExp(`-${st}(-\\d+)?$`).test(name), `${name} is not tagged ${st}`);
+    }
+  }
+  assert.equal(new Set(METROS.map((m) => m[0])).size, METROS.length, 'names must be unique');
+  assert.equal(METROS.length, states.reduce((n, st) => n + METROS_BY_STATE[st].length, 0));
+});
+
+test('the sweep order visits different states straight away', () => {
+  // Grouped alphabetically and walked in order, the first month of crawling
+  // would never leave Alabama. The first few boxes must be in different states.
+  const first = METROS.slice(0, 8).map(([n]) => n.replace(/-\d+$/, '').slice(-2));
+  assert.equal(new Set(first).size, 8, `expected 8 different states, got ${first}`);
 });
 
 test('untagged franchises are caught by name shape', () => {
