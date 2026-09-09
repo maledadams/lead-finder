@@ -19,6 +19,9 @@ import { renderDashboard } from '../src/dashboard.js';
 import { renderMetrics } from '../src/metrics.js';
 import { getQueue } from '../src/queue.js';
 import { resolveProfile } from '../src/profiles.js';
+import { categoryCounts, listCategories, seedDefaultCategories } from '../src/categories.js';
+import { docTree, getDoc, saveDoc } from '../src/docs.js';
+import { metrosFor } from '../src/regions.js';
 
 const SCHEMA = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 
@@ -180,4 +183,72 @@ test('a surface with no profile refuses rather than showing everything', async (
   await assert.rejects(() => page(db, undefined, 'today'), /needs a profile/);
   await assert.rejects(() => renderMetrics(db, {}, { period: 'all' }), /needs a profile/);
   await assert.rejects(() => getQueue(db, null, DAY), /needs a profileId/);
+});
+
+// ---------------------------------------------------------------------------
+// Everything added later is scoped the same way, or it is not scoped at all.
+// ---------------------------------------------------------------------------
+
+test('skip categories belong to one profile', async () => {
+  const { raw, db } = fresh();
+  const creative = await resolveProfile(db, 'creative');
+  const medium = await resolveProfile(db, 'medium');
+
+  // Both profiles get the same four seeded names, but they are different rows.
+  // p-medium is created by migration 009, which predates categories entirely —
+  // exactly what happens to any profile added before this feature existed.
+  assert.equal((await listCategories(db, medium.id)).length, 0);
+  await seedDefaultCategories(db, medium.id);
+
+  const a = await listCategories(db, creative.id);
+  const b = await listCategories(db, medium.id);
+  assert.equal(a.length, 4);
+  assert.equal(b.length, 4);
+  assert.equal(new Set([...a, ...b].map((c) => c.id)).size, 8, 'eight rows, not four shared');
+
+  // Renaming one profile's category must not touch the other's.
+  raw.exec(`UPDATE skip_categories SET name = 'Renamed' WHERE id = '${a[0].id}'`);
+  assert.equal((await listCategories(db, medium.id)).some((c) => c.name === 'Renamed'), false);
+});
+
+test('the skip chart counts one profile\'s skips', async () => {
+  const { raw, db } = fresh();
+  const creative = await resolveProfile(db, 'creative');
+  const medium = await resolveProfile(db, 'medium');
+  raw.exec(`INSERT INTO feedback (id,profile_id,entity_id,decision,reason,reviewer,created_at)
+            VALUES ('s1','p-medium','e-den','SKIPPED','too corporate','t','${DAY}')`);
+
+  const a = await categoryCounts(db, creative.id, '2026-01-01', '9999-12-31');
+  const b = await categoryCounts(db, medium.id, '2026-01-01', '9999-12-31');
+  assert.equal(a.reduce((n, r) => n + r.n, 0), 0, 'the creative profile skipped nothing');
+  assert.equal(b.reduce((n, r) => n + r.n, 0), 2, 'its own skip, and the one the fixture made');
+});
+
+test('a document can be shared by both profiles or held by one', async () => {
+  const { db } = fresh();
+  await saveDoc(db, { title: 'Shared thing', bodyMd: 'x' });
+  await saveDoc(db, { title: 'Medium only', bodyMd: 'x', scope: ['p-medium'] });
+
+  assert.ok(await getDoc(db, 'p-creative', 'shared-thing'), 'unscoped means everyone');
+  assert.ok(await getDoc(db, 'p-medium', 'shared-thing'));
+
+  assert.equal(await getDoc(db, 'p-creative', 'medium-only'), null);
+  assert.ok(await getDoc(db, 'p-medium', 'medium-only'));
+
+  const tree = await docTree(db, 'p-creative');
+  assert.ok(!JSON.stringify(tree).includes('Medium only'));
+});
+
+test('geography is shared unless a profile narrows it', async () => {
+  const { raw, db } = fresh();
+  const creative = await resolveProfile(db, 'creative');
+  const medium = await resolveProfile(db, 'medium');
+  raw.exec(`INSERT INTO regions (id,profile_id,kind,country,name,slug,bbox,priority,active,source,acknowledged_at,created_at)
+            VALUES ('r1',NULL,'city','US','Savannah','savannah-us','[32,-81,32.1,-80.9]',5,1,'t','${DAY}','${DAY}')`);
+
+  // The medium profile ships with metros = NULL, so both use the national list.
+  const a = await metrosFor(db, creative);
+  const b = await metrosFor(db, medium);
+  assert.equal(a[0][0], 'savannah-us', 'a shared addition reaches both');
+  assert.equal(b[0][0], 'savannah-us');
 });

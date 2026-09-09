@@ -22,6 +22,7 @@
 import { renderMetrics } from './metrics.js';
 import { bookingUrl } from './outreach.js';
 import { confirmDialog, esc, icon, settingsDialog } from './ui.js';
+import { docEditor, docPage, docsIndex, docsRail, folderPage } from './docsview.js';
 
 // Twenty a page, everywhere that lists entries. Also the cheapest single
 // optimisation here: a history page reads 60% fewer rows than it did at fifty.
@@ -52,6 +53,7 @@ const TITLES = {
   bounced: 'Bounced',
   metrics: 'Metrics',
   calendar: 'Calendar',
+  docs: 'Documentation',
 };
 
 
@@ -74,13 +76,15 @@ export async function renderDashboard(db, env, opts = {}) {
        (SELECT COUNT(*) FROM entities WHERE profile_id = ?1 AND state = 'CONTACTED') AS contacted`
   ).bind(pid, day).first() || {};
 
-  const body = view === 'calendar'
-    ? calendarView(opts.calendar, env)
-    : view === 'today'
-      ? await todayView(db, pid, day, sending, profile)
-      : view === 'metrics'
-        ? await renderMetrics(db, env, { period: opts.period || 'month', profile, day: opts.metricDay })
-        : await historyView(db, pid, view, { page, q, from, to }, profile);
+  const body = view === 'docs'
+    ? opts.docsBody
+    : view === 'calendar'
+      ? calendarView(opts.calendar, env)
+      : view === 'today'
+        ? await todayView(db, pid, day, sending, profile)
+        : view === 'metrics'
+          ? await renderMetrics(db, env, { period: opts.period || 'month', profile, day: opts.metricDay })
+          : await historyView(db, pid, view, { page, q, from, to }, profile);
 
   // The settings sheet is on every page, so its categories are read once here.
   const [cats, geo] = await Promise.all([
@@ -95,6 +99,8 @@ export async function renderDashboard(db, env, opts = {}) {
     categories: cats.results || [],
     regions: geo.results || [],
     metroCount: opts.metroCount || 0,
+    docsTree: opts.docsTree || null,
+    docsSlug: opts.docsSlug || null,
   });
 }
 
@@ -836,7 +842,7 @@ function settingsPanels({ profile, profiles, sending, env, categories = [], regi
 }
 
 function shell({ view, nonce, signedInAs, sending, counts, body, profile, profiles, env,
-  categories, regions, metroCount }) {
+  categories, regions, metroCount, docsTree, docsSlug }) {
   // Every link carries the profile, so a middle-click into a new tab lands in
   // the same operation rather than in whichever one is default.
   const qs = `?profile=${encodeURIComponent(profile.slug)}`;
@@ -965,6 +971,95 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   @media (prefers-color-scheme:dark){
     :root:not([data-theme="light"]) .nav[aria-current="page"] .n{background:rgba(0,111,238,.3);color:var(--p200)}
   }
+  /* The rail does not go anywhere when you enter documentation — its contents
+     slide sideways. Two panes on a track, one transform. The profile switcher
+     and Settings sit outside it so they never move. */
+  .track{flex:1;min-height:0;overflow:hidden;position:relative}
+  .track .pane{position:absolute;inset:0;display:flex;flex-direction:column;gap:2px;
+       overflow-y:auto;transition:transform .34s cubic-bezier(.16,1,.3,1),opacity .2s}
+  .track .pane.docs{transform:translateX(100%);opacity:0}
+  .rail[data-mode="docs"] .track .pane{transform:translateX(-100%);opacity:0}
+  .rail[data-mode="docs"] .track .pane.docs{transform:translateX(0);opacity:1}
+  .railhead{font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
+       font-weight:600;margin:12px 11px 6px}
+  .nav.back{color:var(--muted);font-size:13px}
+  .nav.back .ico{width:14px;height:14px}
+  .nav.sub{font-size:13px;padding-left:22px}
+  .nav.sub.on{background:var(--p50);color:var(--p600);font-weight:600}
+  :root:not([data-theme="light"]) .nav.sub.on{background:rgba(0,111,238,.18);color:var(--p300)}
+  .nav.new{color:var(--accent);margin-top:6px}
+  .folderlink{font-style:italic;opacity:.85}
+  .tree>summary{display:flex;align-items:center;gap:8px;padding:8px 11px;border-radius:var(--r-s);
+       cursor:pointer;font-size:14px;color:var(--muted);list-style:none}
+  .tree>summary::-webkit-details-marker{display:none}
+  .tree>summary:hover{background:var(--c-2);color:var(--fg)}
+  .tree>summary .n{margin-left:auto;font-size:12px;color:var(--muted)}
+  @media (prefers-reduced-motion:reduce){ .track .pane{transition:none} }
+
+  /* ---- documentation ------------------------------------------------- */
+  .tools{margin-left:auto;display:flex;gap:2px;align-items:center}
+  .tool{display:inline-flex;align-items:center;justify-content:center;padding:6px;
+        border:0;background:none;color:var(--muted);border-radius:var(--r-s);
+        text-decoration:none;opacity:0;transition:opacity .15s,background .15s}
+  .card:hover .tool,.head .tool,.card:focus-within .tool{opacity:1}
+  .tool:hover{background:var(--c-2);color:var(--fg)}
+  .tool.danger-ico:hover{background:color-mix(in srgb,var(--bad) 12%,transparent);color:var(--bad)}
+  @media (pointer:coarse){ .tool{opacity:1} }
+  .crumb{font-size:12.5px;color:var(--muted);text-decoration:none;
+         display:block;width:100%;margin-bottom:-6px}
+  .folder .top{display:flex;align-items:center;gap:9px}
+  .folder .top h3{margin:0}
+  .folder .top h3 a{text-decoration:none}
+  .doc-expand>summary{cursor:pointer;display:flex;gap:12px;align-items:baseline;padding:4px 0}
+  .doc-expand>summary .dim{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .btn{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;padding:8px 15px;
+       border-radius:var(--r-s);border:1px solid var(--line);background:var(--c-1);
+       color:var(--fg);text-decoration:none;font-weight:500}
+  .btn.go{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+  .pushright{margin-left:auto}
+  .updated{margin-top:26px}
+
+  /* Prose: a measure that can be read, which the rest of the app does not need. */
+  .prose{max-width:70ch;font-size:14.5px;line-height:1.75}
+  .prose h1,.prose h2,.prose h3{letter-spacing:-.015em;margin:1.6em 0 .5em;
+       text-transform:none;color:var(--fg);font-weight:650}
+  .prose h1{font-size:22px} .prose h2{font-size:17px} .prose h3{font-size:15px}
+  .prose p,.prose li{margin:.7em 0}
+  .prose ul,.prose ol{padding-left:1.3em}
+  .prose code{background:var(--c-2);padding:1px 5px;border-radius:5px;font-size:.9em}
+  .prose pre{background:var(--c-2);padding:14px 16px;border-radius:var(--r-m);overflow-x:auto}
+  .prose pre code{background:none;padding:0}
+  .prose blockquote{margin:1em 0;padding-left:14px;border-left:3px solid var(--line);color:var(--muted)}
+  .prose table{border-collapse:collapse;width:100%;font-size:13.5px}
+  .prose th,.prose td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left}
+  .prose hr{border:0;border-top:1px solid var(--line);margin:2em 0}
+  .dead-link{color:var(--muted);text-decoration:line-through}
+
+  .editor input,.editor select,.editor textarea{width:100%;font:inherit;font-size:14px;
+       padding:9px 11px;border-radius:var(--r-s);border:1px solid var(--line);
+       background:var(--c-2);color:var(--fg);margin-bottom:10px}
+  .editor #d-title{font-size:19px;font-weight:650;letter-spacing:-.015em}
+  .scope{border:1px solid var(--line);border-radius:var(--r-m);padding:10px 14px;margin:4px 0 12px}
+  .check{display:inline-flex;align-items:center;gap:6px;font-size:13px;margin-right:14px}
+  .check input{width:auto;margin:0}
+  .iconpick{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-bottom:12px}
+  .ipick input{position:absolute;opacity:0;width:0}
+  .ipick span{display:inline-flex;padding:7px;border-radius:var(--r-s);color:var(--muted);
+       border:1px solid transparent;cursor:pointer}
+  .ipick input:checked+span{border-color:var(--accent);color:var(--accent);background:var(--p50)}
+  .ipick input:focus-visible+span{box-shadow:var(--ring)}
+  .mdbar{display:flex;gap:3px;align-items:center;flex-wrap:wrap;
+       border:1px solid var(--line);border-bottom:0;border-radius:var(--r-s) var(--r-s) 0 0;
+       padding:6px;background:var(--c-2)}
+  .mdbar button{padding:5px 10px;font-size:13px;min-width:32px;justify-content:center;
+       border-color:transparent;background:none}
+  .mdbar .tabs{margin-left:auto;display:flex;gap:2px}
+  .mdbar .tabs button.on{background:var(--c-1);font-weight:600}
+  .mdbody{border-radius:0 0 var(--r-s) var(--r-s)!important;min-height:420px;
+       font:13.5px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
+  .preview{border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r-s) var(--r-s);
+       padding:18px 20px;min-height:420px;max-width:none}
+
   .foot{margin-top:auto;padding:12px 11px 0;font-size:12px;color:var(--muted);line-height:1.6;
         border-top:1px solid var(--line)}
   .foot b{font-variant-numeric:tabular-nums;color:var(--fg)}
@@ -1257,7 +1352,7 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style></head><body>
 <div class="app">
-<nav class="rail">
+<nav class="rail" data-mode="${view === 'docs' ? 'docs' : 'queue'}">
   <div class="brand">${icon('glass')}<span>Leads</span></div>
 
   <label class="psel">
@@ -1265,12 +1360,23 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
     <select id="profile" aria-label="Switch profile">${options}</select>
   </label>
 
+  <div class="track">
+   <div class="pane">
+
   ${item('/', 'today', 'Today', counts.todo || 0)}
   ${item('/sent', 'sent', 'Sent', counts.sent || 0)}
   ${item('/skipped', 'skipped', 'Skipped', counts.skipped || 0)}
   ${item('/bounced', 'bounced', 'Bounced', counts.bounced || 0)}
   ${item('/metrics', 'metrics', 'Metrics', 0)}
   ${item('/calendar', 'calendar', 'Calendar', 0)}
+  <a class="nav" href="/docs${qs}"${view === 'docs' ? ' aria-current="page"' : ''}>${
+    icon('doc')}<span>Documentation</span></a>
+
+   </div>
+   <div class="pane docs">
+     ${docsTree ? docsRail(docsTree, docsSlug) : ''}
+   </div>
+  </div>
 
   <button class="nav pinned" data-act="open-settings" aria-haspopup="dialog">
     ${icon('settings')}<span>Settings</span>
@@ -1476,6 +1582,64 @@ for (const t of document.querySelectorAll('time.d[datetime]')) {
 
 // A new profile. The model writes the categories, the keywords and the scoring
 // brief from this one sentence; nothing here is code the person has to write.
+// ---- the markdown editor --------------------------------------------------
+//
+// The toolbar wraps the selection; the textarea stays the document. Everything
+// here works if the toolbar is ignored, which is what makes it usable by
+// keyboard and what stops it being a second, worse source of truth.
+const body = document.querySelector('[data-field="doc-body"]');
+// The one character this file cannot contain literally: the whole client script
+// lives inside a template literal, so a backtick here would end it.
+const TICK = String.fromCharCode(96);
+const WRAP = {
+  bold: ['**', '**', 'bold text'],
+  italic: ['*', '*', 'italic text'],
+  code: [TICK, TICK, 'code'],
+  h2: ['## ', '', 'Heading'],
+  quote: ['> ', '', 'Quoted'],
+  ul: ['- ', '', 'List item'],
+  ol: ['1. ', '', 'List item'],
+  link: ['[', '](https://)', 'link text'],
+};
+
+function applyMd(kind){
+  const rule = WRAP[kind];
+  if(!rule || !body) return;
+  const [before, after, placeholder] = rule;
+  const start = body.selectionStart;
+  const end = body.selectionEnd;
+  const chosen = body.value.slice(start, end) || placeholder;
+  // Line prefixes go on every selected line; wrappers go around the selection.
+  const made = after === ''
+    ? chosen.split('\n').map((l) => before + l).join('\n')
+    : before + chosen + after;
+  body.setRangeText(made, start, end, 'select');
+  body.focus();
+}
+
+document.addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-md],[data-tab]');
+  if(!b) return;
+  if(b.dataset.md){ ev.preventDefault(); applyMd(b.dataset.md); return; }
+
+  // Preview is rendered by the server with the same function that renders the
+  // saved page, so there is exactly one markdown implementation in the system.
+  const preview = document.getElementById('d-preview');
+  const write = b.dataset.tab === 'write';
+  for(const t of document.querySelectorAll('[data-tab]')) t.classList.toggle('on', t === b);
+  if(write){ body.hidden = false; preview.hidden = true; return; }
+
+  preview.hidden = false; body.hidden = true;
+  preview.innerHTML = '<p class="dim">Rendering…</p>';
+  try {
+    const r = await fetch('/api/docs/preview', {
+      method:'POST', headers:{'content-type':'application/json'},
+      credentials:'same-origin', body: JSON.stringify({markdown: body.value}),
+    });
+    preview.innerHTML = (await r.json()).html || '';
+  } catch(e){ preview.textContent = e.message; }
+});
+
 // ---- geography ------------------------------------------------------------
 const addcity = document.getElementById('addcity');
 const country = () => (document.getElementById('rcc').value || 'US').trim().toUpperCase();
@@ -1628,6 +1792,51 @@ document.addEventListener('click', async (ev) => {
       });
       flash('Saved — skips under the old definition will be sorted again');
       setTimeout(()=>location.reload(), 1100);
+    } catch(e){ b.disabled = false; flash(e.message); }
+    return;
+  }
+
+  if(b.dataset.act === 'save-doc'){
+    const form = b.closest('.editor');
+    const val = (n) => form.querySelector('[data-field="' + n + '"]');
+    const title = val('doc-title');
+    if((title.value || '').trim().length < 2){ flash('Give it a title'); title.focus(); return; }
+
+    const chosen = [...form.querySelectorAll('[data-field="doc-profile"]:checked')].map((c) => c.value);
+    const iconEl = form.querySelector('[data-field="doc-icon"]:checked');
+    b.disabled = true;
+    try {
+      const res = await post('/api/docs', {
+        id: form.dataset.did || undefined,
+        title: title.value,
+        body_md: val('doc-body') ? val('doc-body').value : '',
+        parent_id: val('doc-parent').value || null,
+        is_folder: val('doc-folder').value === '1',
+        icon: iconEl ? iconEl.value : null,
+        scope: chosen,
+      });
+      flash('Saved');
+      setTimeout(()=>location.assign('/docs/' + res.slug), 600);
+    } catch(e){ b.disabled = false; flash(e.message); }
+    return;
+  }
+
+  if(b.dataset.act === 'del-doc'){
+    const isFolder = b.dataset.folder === '1';
+    const ok = await askConfirm({
+      body: isFolder
+        ? 'Deleting the folder "' + b.dataset.title + '" also deletes every page inside it. Export anything you want to keep first.'
+        : 'The page "' + b.dataset.title + '" will be deleted.',
+      confirmLabel: 'Delete this',
+    });
+    if(!ok) return;
+    b.disabled = true;
+    try {
+      const r = await fetch('/api/docs/' + b.dataset.did, {method:'DELETE', credentials:'same-origin'});
+      const d = await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error || 'could not delete');
+      flash('Deleted' + (d.children ? ' with ' + d.children + ' page(s) inside' : ''));
+      setTimeout(()=>location.assign('/docs'), 800);
     } catch(e){ b.disabled = false; flash(e.message); }
     return;
   }

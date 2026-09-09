@@ -36,6 +36,40 @@ export async function listCategories(db, profileId, { includeInactive = false } 
   return results || [];
 }
 
+/**
+ * The starter set, given to a profile that has none.
+ *
+ * Seeded rather than hardcoded: these are ordinary rows, editable and deletable
+ * like any you add. A new profile starting with an empty list would mean an
+ * empty chart and a feature nobody discovers, so the normal path hands over
+ * something to react to.
+ */
+export const STARTER_CATEGORIES = [
+  ['not_a_fit', 'Not a fit',
+    'The business is the wrong kind for this profile — wrong trade, wrong size, a chain, an agency, or simply not who this operation is for.',
+    'not my kind,wrong kind,not a fit,too corporate,chain,franchise,agency,not the right'],
+  ['no_value', 'No value',
+    'There is nothing worth building for them. The site is already good, or the work they need is not work this offer covers.',
+    'already great,already good,site is fine,nothing to build,no opportunity,no need,nothing obvious'],
+  ['bad_timing', 'Bad timing',
+    'A fine lead, wrong moment — recently rebuilt, mid redesign, closed for the season, or otherwise worth revisiting later.',
+    'just rebuilt,recently redesigned,mid redesign,new site,closed,seasonal,later,not right now,too soon'],
+  ['difficult', 'Difficult',
+    'Reachable but not worth the friction — no way in, gatekept, a committee, an unresponsive contact, or a budget that will not stretch.',
+    'no contact,cannot reach,gatekeeper,committee,no budget,too cheap,too big,hard to reach,no email'],
+];
+
+export async function seedDefaultCategories(db, profileId) {
+  if (!profileId) throw new Error('seedDefaultCategories needs a profileId');
+  const ts = nowIso();
+  await db.batch(STARTER_CATEGORIES.map(([slug, name, definition, keywords], i) => db.prepare(
+    `INSERT OR IGNORE INTO skip_categories
+       (id, profile_id, slug, name, definition, keywords, position, active, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,1,?,?)`
+  ).bind(`${profileId}:${slug}`, profileId, slug, name, definition, keywords, i + 1, ts, ts)));
+  return { ok: true, added: STARTER_CATEGORIES.length };
+}
+
 export async function categoriesVersion(db, profileId) {
   const row = await db.prepare('SELECT categories_version FROM profiles WHERE id = ?')
     .bind(profileId).first();

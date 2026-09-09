@@ -39,6 +39,8 @@ that gets better at picking leads the more you tell it why you skipped one.
 - [Making it yours](#making-it-yours-the-part-that-is-not-configuration)
 - [The review dashboard](#the-review-dashboard)
 - [The calendar](#the-calendar)
+- [Settings](#settings)
+- [Documentation](#documentation)
 - [Metrics](#metrics)
 - [What it costs to run](#what-it-costs-to-run)
 - [Legal: CAN-SPAM and crawling](#legal-can-spam-and-crawling)
@@ -304,7 +306,7 @@ falls back to, and these are the files that define it.
 | `src/outreach.js` → `FIX` | What fixing each kind of problem actually involves |
 | `src/ai.js` → `SYSTEM` | The fallback scoring brief |
 | `src/score.js` | Deterministic weights and hard vetoes — shared by every profile |
-| `src/metros.js` | Where to look — all fifty states, grouped by state |
+| `src/metros.js` | The fallback geography — all fifty states, grouped by state. Adding to it is a Settings job, not a code one |
 
 The three sentences every email carries whatever the profile — what you build,
 how you build it, and the booking link — live in `src/outreach.js` as
@@ -427,6 +429,55 @@ Read-only by design. Cal.com already has a good interface for moving a call, and
 a second one here would only be somewhere else to get it wrong. Set
 `CAL_BOOKING_URL` for the link in the emails and `CAL_API_KEY` for the page; with
 neither set, the emails invite a reply and the page says so.
+
+## Settings
+
+Everything disruptive lives in one sheet, reachable from the sidebar on any
+page. A form that sits beside the work invites being filled in by accident.
+
+| Panel | What it does |
+|---|---|
+| **Where to crawl** | Add a city (geocoded live through OpenStreetMap), import a whole country, set priorities, or block somewhere permanently — blocks apply to the built-in list too. |
+| **Skip categories** | Define the buckets the metrics page counts. Name, definition, and optional keywords. |
+| **Profiles** | Create, rename, set default, per-profile daily budgets, archive, and permanent deletion. |
+| **Sending** | Zoho connection, today's count against the cap, the bounce label. |
+
+**Adding a country is a legal decision, not a geographic one.** CAN-SPAM covers
+the United States. The EU is GDPR; Canada is CASL, which requires consent
+*before* you send and fines per message. A non-US place is stored and listed but
+**not crawled** until that is acknowledged, and the acknowledgement is recorded.
+
+### Skip categories
+
+Raw skip reasons are only countable while you happen to write the same sentence
+twice. Categories turn them into something a trend can be read from.
+
+Sorting is deliberately cheap: a category's **keywords are matched first**, at no
+cost at all, and only what they miss goes to the model — in **one batched call**,
+never one per skip. Every answer is stamped with a category version, so nothing
+is ever classified twice. Editing a definition bumps that version and re-sorts
+everything filed under the old meaning, so the chart never quietly starts meaning
+something different from what it meant last week.
+
+Nothing is hardcoded. The four that ship are seeded rows, editable and deletable
+like any you add, and a new profile gets its own copy.
+
+## Documentation
+
+Pages you write in the dashboard, in markdown, stored in the database. The
+sidebar slides sideways into a folder tree; folders take an icon; pages can be
+shared by every profile or scoped to some of them.
+
+Markdown is rendered **once, on save**, and the HTML is stored beside the source,
+so viewing a page parses nothing. The preview button calls the same renderer as
+the save, so a preview cannot show something the saved page will not.
+
+It is safe by construction rather than by sanitiser: the source is HTML-escaped
+*before* it reaches the parser, so a `<script>` in a document can only ever come
+out as visible text. That alone is not enough — a markdown link can still carry
+`javascript:` — so links and images are filtered to `http`, `https` and `mailto`
+as well. A blocked link keeps its words and loses its destination. Both halves
+are asserted in `test/docs.test.js`.
 
 ## Metrics
 

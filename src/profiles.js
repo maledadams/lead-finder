@@ -26,6 +26,7 @@ import { NICHES as DEFAULT_NICHES, AI_MODEL } from './config.js';
 import { METROS as DEFAULT_METROS } from './osm.js';
 import { PERSONAS as DEFAULT_PERSONAS } from './outreach.js';
 import { newId, nowIso } from './entity.js';
+import { seedDefaultCategories } from './categories.js';
 
 export const DEFAULT_PROFILE_ID = 'p-creative';
 
@@ -269,6 +270,10 @@ export async function createProfile(env, db, { name, brief, slug = null }) {
     JSON.stringify(niches), JSON.stringify(personas), JSON.stringify(seeds),
     JSON.stringify({ osm_tags: osmTags.length }), ts, ts
   ).run();
+
+  // The starter skip categories, so the new profile's metrics are not blank and
+  // the feature is not something to go looking for. They are ordinary rows.
+  await seedDefaultCategories(db, id);
 
   // Discovery starts from these. Seeded here rather than on first crawl so the
   // profile is not silently empty until the next cron tick.

@@ -30,6 +30,10 @@ import {
   listRegions, metrosFor, removeRegion, setPriority,
 } from './regions.js';
 import {
+  childrenOf, deleteDoc, docTree, getDoc, renderMarkdown, saveDoc,
+} from './docs.js';
+import { docEditor, docPage, docsIndex, folderPage } from './docsview.js';
+import {
   completeLogin, exchangeKeyForSession, googleConfigured, logout,
   sessionFrom, startLogin, verifySession,
 } from './auth.js';
@@ -379,6 +383,54 @@ export default {
       // the same nonce and the same CSP. A page that quietly rendered without
       // cspFor() would still work, which is exactly why it would go unnoticed
       // — and it displays text scraped from other people's websites.
+      // ---- documentation --------------------------------------------------
+      //
+      // Rendered through the same shell as everything else, so the rail, the
+      // settings sheet and the confirm dialog come along unchanged. Only the
+      // body and the rail's second pane differ.
+      const docPath = url.pathname === '/docs' ? ''
+        : (url.pathname.startsWith('/docs/') ? decodeURIComponent(url.pathname.slice(6)) : null);
+
+      if (docPath !== null && request.method === 'GET') {
+        const nonce = btoa(crypto.randomUUID()).replace(/=+$/, '');
+        const tree = await docTree(db, pid);
+        const folders = tree.folders;
+        let docsBody;
+        let slug = null;
+
+        if (!docPath) {
+          docsBody = url.searchParams.get('new') === '1'
+            ? docEditor(null, {
+              folders, profiles: await listProfiles(db), isNew: true,
+              parentId: url.searchParams.get('parent'),
+            })
+            : docsIndex(tree);
+        } else {
+          const doc = await getDoc(db, pid, docPath);
+          if (!doc) return json({ error: 'not found', pathname: url.pathname }, 404);
+          slug = doc.slug;
+          docsBody = url.searchParams.get('edit') === '1'
+            ? docEditor(doc, { folders, profiles: await listProfiles(db) })
+            : (doc.is_folder
+              ? folderPage(doc, await childrenOf(db, pid, doc.id))
+              : docPage(doc));
+        }
+
+        const html = await renderDashboard(db, env, {
+          view: 'docs', nonce, signedInAs, profile, env,
+          profiles: await listProfiles(db),
+          sending: null, day: todayStr(), page: 1, q: '', from: null, to: null,
+          docsBody, docsTree: tree, docsSlug: slug,
+        });
+        return new Response(html, {
+          headers: {
+            ...SECURITY_HEADERS,
+            'content-type': 'text/html; charset=utf-8',
+            'content-security-policy': cspFor(nonce),
+          },
+        });
+      }
+
       const view = PAGES[url.pathname];
       if (view) {
         const nonce = btoa(crypto.randomUUID()).replace(/=+$/, '');
@@ -843,6 +895,43 @@ export default {
       if (url.pathname === '/api/run/queue' && request.method === 'POST') {
         const dryRun = url.searchParams.get('dry') === '1';
         return json(await buildQueue(env, db, profile, { dryRun }));
+      }
+
+      // ---- documentation --------------------------------------------------
+      // Rendered by the same function that renders a saved page, so the preview
+      // cannot show something the page will not.
+      if (url.pathname === '/api/docs/preview' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        return json({ html: renderMarkdown(String(body.markdown || '').slice(0, 200000)) });
+      }
+
+      if (url.pathname === '/api/docs' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const res = await saveDoc(db, {
+          id: body.id, parentId: body.parent_id, isFolder: body.is_folder === true,
+          title: body.title, bodyMd: body.body_md, icon: body.icon,
+          scope: Array.isArray(body.scope) ? body.scope : null,
+        });
+        return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 400));
+      }
+
+      const docExport = url.pathname.match(/^\/api\/docs\/([\w-]+)\/export$/);
+      if (docExport && request.method === 'GET') {
+        const row = await db.prepare('SELECT * FROM docs WHERE id = ?').bind(docExport[1]).first();
+        if (!row) return json({ error: 'not-found' }, 404);
+        return new Response(row.body_md || '', {
+          headers: {
+            ...SECURITY_HEADERS,
+            'content-type': 'text/markdown; charset=utf-8',
+            'content-disposition': `attachment; filename="${row.slug}.md"`,
+          },
+        });
+      }
+
+      const docRow = url.pathname.match(/^\/api\/docs\/([\w-]+)$/);
+      if (docRow && request.method === 'DELETE') {
+        const res = await deleteDoc(db, docRow[1]);
+        return json(res, res.ok ? 200 : 404);
       }
 
       // ---- skip categories ----------------------------------------------
