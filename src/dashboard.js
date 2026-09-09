@@ -457,10 +457,6 @@ function historyRow(r, view) {
     ${emailDrawer(r)}
     ${view === 'skipped' && r.reason ? `<div class="why sm"><b>Reason:</b> ${esc(r.reason)}</div>` : ''}
     ${view === 'bounced' && r.send_error ? `<div class="why sm"><b>Bounce:</b> ${esc(r.send_error)}</div>` : ''}
-    <details>
-      <summary>The email</summary>
-      <div class="mail">${esc(r.body)}</div>
-    </details>
     ${rowActions(r, view)}
   </div>
   <div class="rmeta">
@@ -469,6 +465,10 @@ function historyRow(r, view) {
     ${view === 'sent' && r.contact_email ? `<div class="dim sm">${esc(r.contact_email)}</div>` : ''}
     ${noteControl()}
   </div>
+  <details class="wide">
+    <summary>The email</summary>
+    <div class="mail">${esc(r.body)}</div>
+  </details>
 </div>`;
 }
 
@@ -737,10 +737,16 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   .rmain{min-width:0} .subj{margin-top:2px}
   .rmeta{display:flex;flex-direction:column;align-items:flex-end;gap:3px;
          text-align:right;white-space:nowrap}
-  /* The note field sits under the date and the address, in the same column and
-     laid out horizontally. */
-  .rmeta .notes{margin:8px 0 0;width:auto}
+  /* The note field stays in this column, under the date and the address, but
+     drops to the bottom of it so it lines up with the row's buttons rather than
+     hanging off the date. An auto top margin in a stretched grid cell does that,
+     and it needs no knowledge of how tall the row happens to be. */
+  .rmeta .notes{margin-top:auto;width:auto}
   .rmeta .npill{flex:0 1 180px;min-width:130px}
+
+  /* The email reads at the width it does on Today: across the whole row rather
+     than inside the left column, which the date and note column was narrowing. */
+  .row>details.wide{grid-column:1/-1;margin:2px 0 0}
   .when{font-size:13px;font-variant-numeric:tabular-nums}
   .row .pill{margin-left:0}
 
