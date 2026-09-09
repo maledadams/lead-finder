@@ -25,6 +25,10 @@ import {
   classifyPending, deleteCategory, listCategories, upsertCategory,
 } from './categories.js';
 import {
+  acknowledgeCountry, addCity, blockRegion, complianceNote, importCountry,
+  listRegions, metrosFor, removeRegion, setPriority,
+} from './regions.js';
+import {
   completeLogin, exchangeKeyForSession, googleConfigured, logout,
   sessionFrom, startLogin, verifySession,
 } from './auth.js';
@@ -864,6 +868,51 @@ export default {
         return json(await classifyPending(env, db, pid, {
           limit: Math.min(Number(url.searchParams.get('limit')) || 60, 200),
         }));
+      }
+
+      // ---- where to crawl -------------------------------------------------
+      if (url.pathname === '/api/regions' && request.method === 'GET') {
+        return json({
+          places: await listRegions(db, pid),
+          in_rotation: (await metrosFor(db, profile)).length,
+        });
+      }
+
+      if (url.pathname === '/api/regions' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const res = await addCity(db, {
+          name: body.name, country: body.country, priority: Number(body.priority) || 0,
+          userAgent: env.USER_AGENT,
+        });
+        return json(res, res.ok ? 200 : 400);
+      }
+
+      // A whole country in one Overpass query. Configured but dormant until the
+      // rules that are not CAN-SPAM have been acknowledged.
+      if (url.pathname === '/api/regions/country' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const res = await importCountry(db, { country: body.country, limit: body.limit });
+        return json(res, res.ok ? 200 : 400);
+      }
+
+      if (url.pathname === '/api/regions/acknowledge' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        return json(await acknowledgeCountry(db, body.country));
+      }
+
+      if (url.pathname === '/api/regions/block' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const res = await blockRegion(db, { slug: body.slug, name: body.name, reason: body.reason });
+        return json(res, res.ok ? 200 : 400);
+      }
+
+      const region = url.pathname.match(/^\/api\/regions\/([\w-]+)$/);
+      if (region && request.method === 'DELETE') {
+        return json(await removeRegion(db, region[1]));
+      }
+      if (region && request.method === 'PATCH') {
+        const body = await request.json().catch(() => ({}));
+        return json(await setPriority(db, region[1], body.priority));
       }
 
       // ---- profiles -----------------------------------------------------

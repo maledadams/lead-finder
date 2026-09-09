@@ -22,6 +22,7 @@ import {
 } from './discover.js';
 import { nextKeywords, queryCertTransparency, recordKeywordRun } from './sources.js';
 import { flagCrossMetroChains, nextMetros, osmSpecFor, queryMetro, recordMetroRun } from './osm.js';
+import { metrosFor } from './regions.js';
 import {
   activeKeywords, demoteUnproductive, harvestWikipedia, mineCorpus, recordUse,
   storeCandidates, validateBatch,
@@ -216,7 +217,11 @@ async function topUpFrontier(env, db, budget, outOfTime = () => false, profile =
   // website. Derived from the profile's own niches — see osmSpecFor().
   const osmSpec = osmSpecFor(profile);
   const metroCount = Math.min(num(env, 'SOURCE_METROS_PER_RUN', 2), budget.remaining('source'));
-  const due = await nextMetros(db, profileId, metroCount, 20, profile?.metros);
+  // Built-in boxes, plus anything added from Settings, minus anything blocked.
+  // An empty regions table gives exactly the built-in list, which is why this
+  // was safe to switch on before anyone had used it.
+  const geography = await metrosFor(db, profile);
+  const due = await nextMetros(db, profileId, metroCount, 20, geography);
   if (!due.length && frontierHealthy) return { ...out, skipped: 'all-metros-swept-recently' };
 
   for (const { metro, bbox } of due) {

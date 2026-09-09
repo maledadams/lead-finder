@@ -464,3 +464,37 @@ SELECT p.id || ':difficult', p.id, 'difficult', 'Difficult',
        'Reachable but not worth the friction — no way in, gatekept, a committee, an unresponsive contact, or a budget that will not stretch.',
        'no contact,cannot reach,gatekeeper,committee,no budget,too cheap,too big,hard to reach,no email',
        4, 1, '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z' FROM profiles p;
+
+-- ---------------------------------------------------------------------------
+-- regions — where to crawl, decided from the UI (migration 012)
+--
+-- src/metros.js holds 1,123 built-in US boxes and stays the fallback. This
+-- table only adds to that list and subtracts from it, so an empty table means
+-- exactly the built-in behaviour.
+--
+-- One table, two kinds: 'city' is somewhere to look, 'block' is somewhere never
+-- to look again — matched by name against the built-in boxes as well, which is
+-- the only way "never crawl Miami again" can mean it.
+--
+-- acknowledged_at is not decoration. CAN-SPAM covers the United States; the EU
+-- is GDPR and Canada is CASL, which needs consent BEFORE sending and fines per
+-- message. Somewhere outside the US is configured but not swept until someone
+-- has said they understand that, and this column is the record that they did.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS regions (
+  id              TEXT PRIMARY KEY,
+  profile_id      TEXT,                     -- NULL = every profile
+  kind            TEXT NOT NULL,            -- 'city' | 'block'
+  country         TEXT NOT NULL DEFAULT 'US',
+  name            TEXT NOT NULL,
+  slug            TEXT NOT NULL,            -- the metro key the crawl uses
+  bbox            TEXT,                     -- JSON [s,w,n,e]; NULL for a block
+  priority        INTEGER NOT NULL DEFAULT 0,  -- higher is swept sooner
+  active          INTEGER NOT NULL DEFAULT 1,
+  source          TEXT,                     -- 'manual' | 'nominatim' | 'overpass'
+  acknowledged_at TEXT,
+  created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_regions_use  ON regions(kind, active, priority DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_regions_slug ON regions(kind, COALESCE(profile_id, ''), slug);

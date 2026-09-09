@@ -83,13 +83,18 @@ export async function renderDashboard(db, env, opts = {}) {
         : await historyView(db, pid, view, { page, q, from, to }, profile);
 
   // The settings sheet is on every page, so its categories are read once here.
-  const { results: categories } = await db.prepare(
-    'SELECT * FROM skip_categories WHERE profile_id = ? ORDER BY position, name'
-  ).bind(pid).all();
+  const [cats, geo] = await Promise.all([
+    db.prepare('SELECT * FROM skip_categories WHERE profile_id = ? ORDER BY position, name')
+      .bind(pid).all(),
+    db.prepare(`SELECT * FROM regions WHERE profile_id IS NULL OR profile_id = ?
+                ORDER BY kind, priority DESC, name`).bind(pid).all(),
+  ]);
 
   return shell({
     view, nonce, signedInAs, sending, counts, body, profile, profiles, env,
-    categories: categories || [],
+    categories: cats.results || [],
+    regions: geo.results || [],
+    metroCount: opts.metroCount || 0,
   });
 }
 
@@ -670,7 +675,27 @@ function categoryRow(c) {
   </details>`;
 }
 
-function settingsPanels({ profile, profiles, sending, env, categories = [] }) {
+function regionRow(r) {
+  const dormant = r.kind === 'city' && r.country !== 'US' && !r.acknowledged_at;
+  return `<div class="srow" data-rid="${esc(r.id)}">
+    <div>
+      <b>${esc(r.name)}</b>
+      ${r.kind === 'block' ? '<span class="pill bounced">never crawl</span>' : ''}
+      ${dormant ? '<span class="pill weak">waiting on the rules</span>' : ''}
+      <div class="dim sm">${esc(r.slug)}${r.country && r.country !== '--' ? ` &middot; ${esc(r.country)}` : ''}</div>
+    </div>
+    <div class="srow-acts">
+      ${r.kind === 'city' ? `<label class="lb vh" for="pri-${esc(r.id)}">Priority for ${esc(r.name)}</label>
+        <input id="pri-${esc(r.id)}" class="pri" type="number" min="-10" max="10" step="1"
+               value="${esc(r.priority)}" data-act="priority" data-rid="${esc(r.id)}"
+               title="Higher is swept sooner">` : ''}
+      <button class="trash" data-act="del-region" data-rid="${esc(r.id)}"
+              aria-label="Remove ${esc(r.name)} from the list">${icon('trash')}</button>
+    </div>
+  </div>`;
+}
+
+function settingsPanels({ profile, profiles, sending, env, categories = [], regions = [], metroCount = 0 }) {
   const rows = (profiles.length ? profiles : [profile]).map((p) => `
     <div class="srow" data-pid="${esc(p.id)}">
       <div>
@@ -686,7 +711,48 @@ function settingsPanels({ profile, profiles, sending, env, categories = [] }) {
       </div>
     </div>`).join('');
 
+  const cities = regions.filter((r) => r.kind === 'city');
+  const blocks = regions.filter((r) => r.kind === 'block');
+
   return [
+    {
+      id: 'geography',
+      label: 'Where to crawl',
+      icon: 'globe',
+      hint: `${metroCount.toLocaleString()} places are in rotation. The built-in list covers all fifty US states; anything you add here is swept first, and anything you block is never swept again.`,
+      body: `
+        <h3>Add a place</h3>
+        <div class="pair">
+          <div><label class="lb" for="rcity">City or town</label>
+            <input id="rcity" type="text" placeholder="Savannah" maxlength="90"></div>
+          <div><label class="lb" for="rcc">Country</label>
+            <input id="rcc" type="text" value="US" maxlength="2" size="2"></div>
+        </div>
+        <div class="acts">
+          <button id="addcity" class="go">Add city</button>
+          <button id="addcountry">Import a whole country</button>
+        </div>
+        <p class="hint">Coordinates come from OpenStreetMap's geocoder, not from
+          typing — a box a few kilometres off centre finds nothing and reports it
+          as an empty town.</p>
+
+        <div class="warn-box">
+          <b>Outside the United States the rules change.</b>
+          CAN-SPAM covers the US. The EU is GDPR, Canada is CASL — which requires
+          consent <em>before</em> you send and fines per message. A non-US place is
+          added but not crawled until you say you understand that.
+        </div>
+
+        ${cities.length ? `<h3>Added</h3><div class="srows">${cities.map(regionRow).join('')}</div>` : ''}
+        ${blocks.length ? `<h3>Never crawl</h3><div class="srows">${blocks.map(regionRow).join('')}</div>` : ''}
+
+        <h3>Block a place</h3>
+        <label class="lb" for="rblock">Its name, as it appears in the list</label>
+        <input id="rblock" type="text" placeholder="miami-fl">
+        <div class="acts"><button id="blockplace" class="no">Never crawl this</button></div>
+        <p class="hint">Blocking works on the built-in cities too, which is the
+          only way "never crawl Miami again" can actually mean it.</p>`,
+    },
     {
       id: 'categories',
       label: 'Skip categories',
@@ -744,7 +810,8 @@ function settingsPanels({ profile, profiles, sending, env, categories = [] }) {
   ];
 }
 
-function shell({ view, nonce, signedInAs, sending, counts, body, profile, profiles, env, categories }) {
+function shell({ view, nonce, signedInAs, sending, counts, body, profile, profiles, env,
+  categories, regions, metroCount }) {
   // Every link carries the profile, so a middle-click into a new tab lands in
   // the same operation rather than in whichever one is default.
   const qs = `?profile=${encodeURIComponent(profile.slug)}`;
@@ -1039,6 +1106,13 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   .head .lead{margin-right:2px}
   .head .lead .ico{width:15px;height:15px}
 
+  .pair{display:grid;grid-template-columns:1fr 90px;gap:10px}
+  .pri{width:64px;text-align:center;font-variant-numeric:tabular-nums;margin:0!important}
+  .warn-box{border:1px solid color-mix(in srgb,var(--warn) 40%,var(--line));
+      background:color-mix(in srgb,var(--warn) 8%,transparent);
+      border-radius:var(--r-m);padding:12px 14px;margin:14px 0;font-size:13px;line-height:1.6}
+  .warn-box b{display:block;margin-bottom:3px}
+
   .srows{border-top:1px solid var(--line)}
   .srow{display:flex;align-items:center;gap:14px;padding:12px 2px;
         border-bottom:1px solid var(--line)}
@@ -1187,7 +1261,7 @@ ${body}
 </main>
 </div>
 <div class="flash" id="flash" role="status" aria-live="polite"></div>
-${settingsDialog(settingsPanels({ profile, profiles, sending, env, categories }))}
+${settingsDialog(settingsPanels({ profile, profiles, sending, env, categories, regions, metroCount }))}
 ${confirmDialog()}
 
 <script nonce="${esc(nonce)}">
@@ -1374,6 +1448,82 @@ for (const t of document.querySelectorAll('time.d[datetime]')) {
 
 // A new profile. The model writes the categories, the keywords and the scoring
 // brief from this one sentence; nothing here is code the person has to write.
+// ---- geography ------------------------------------------------------------
+const addcity = document.getElementById('addcity');
+const country = () => (document.getElementById('rcc').value || 'US').trim().toUpperCase();
+
+async function afterCountryAdd(res){
+  if (res.needs_acknowledgement) {
+    // Configured but dormant. Nothing outside the US is swept until this is
+    // answered, and answering it is recorded.
+    const ok = await askConfirm({
+      body: (res.compliance || 'Outside the United States, CAN-SPAM does not apply and local rules do.')
+        + ' Nothing there will be crawled until you confirm you understand that.',
+      confirmLabel: 'I understand — start crawling there',
+    });
+    if (ok) {
+      await post('/api/regions/acknowledge', { country: res.country || country() });
+      flash('Acknowledged — those places will be swept');
+    } else {
+      flash('Added, but dormant until you acknowledge the rules');
+    }
+  }
+  setTimeout(()=>location.reload(), 1200);
+}
+
+if (addcity) addcity.addEventListener('click', async () => {
+  const name = document.getElementById('rcity');
+  if ((name.value || '').trim().length < 2) { flash('Name the place first'); name.focus(); return; }
+  addcity.disabled = true; addcity.textContent = 'Looking it up…';
+  try {
+    const res = await post('/api/regions', { name: name.value, country: country() });
+    flash('Added ' + res.name);
+    await afterCountryAdd({ ...res, compliance: null });
+  } catch(e){ flash(e.message); }
+  addcity.disabled = false; addcity.textContent = 'Add city';
+});
+
+const addcountry = document.getElementById('addcountry');
+if (addcountry) addcountry.addEventListener('click', async () => {
+  const cc = country();
+  if (cc.length !== 2) { flash('Give a two-letter country code, like CA'); return; }
+  addcountry.disabled = true; addcountry.textContent = 'Importing…';
+  try {
+    const res = await post('/api/regions/country', { country: cc });
+    flash('Added ' + res.added + ' cities in ' + cc);
+    await afterCountryAdd(res);
+  } catch(e){ flash(e.message); }
+  addcountry.disabled = false; addcountry.textContent = 'Import a whole country';
+});
+
+const blockplace = document.getElementById('blockplace');
+if (blockplace) blockplace.addEventListener('click', async () => {
+  const el = document.getElementById('rblock');
+  const slug = (el.value || '').trim();
+  if (slug.length < 2) { flash('Name the place to block'); el.focus(); return; }
+  if(!(await askConfirm({
+    body: 'Never crawl "' + slug + '" again? This applies to the built-in cities too.',
+    confirmLabel: 'Never crawl this',
+  }))) return;
+  try {
+    await post('/api/regions/block', { slug, name: slug });
+    flash('Blocked — it will not be swept again');
+    setTimeout(()=>location.reload(), 900);
+  } catch(e){ flash(e.message); }
+});
+
+document.addEventListener('change', async (ev) => {
+  const el = ev.target;
+  if (el.dataset.act !== 'priority') return;
+  try {
+    await fetch('/api/regions/' + el.dataset.rid, {
+      method: 'PATCH', headers: {'content-type':'application/json'},
+      credentials: 'same-origin', body: JSON.stringify({priority: el.value}),
+    });
+    flash('Priority saved');
+  } catch(e){ flash(e.message); }
+});
+
 const catcreate = document.getElementById('catcreate');
 if (catcreate) catcreate.addEventListener('click', async () => {
   const name = document.getElementById('ncname');
@@ -1450,6 +1600,23 @@ document.addEventListener('click', async (ev) => {
       });
       flash('Saved — skips under the old definition will be sorted again');
       setTimeout(()=>location.reload(), 1100);
+    } catch(e){ b.disabled = false; flash(e.message); }
+    return;
+  }
+
+  if(b.dataset.act === 'del-region'){
+    const row = b.closest('.srow');
+    const name = row.querySelector('b').textContent;
+    if(!(await askConfirm({
+      body: 'Remove "' + name + '" from the list? Leads already found there are kept — this only stops it being swept again.',
+      confirmLabel: 'Delete this',
+    }))) return;
+    b.disabled = true;
+    try {
+      const r = await fetch('/api/regions/' + b.dataset.rid, {method:'DELETE', credentials:'same-origin'});
+      if(!r.ok) throw new Error('could not remove it');
+      flash('Removed');
+      setTimeout(()=>location.reload(), 800);
     } catch(e){ b.disabled = false; flash(e.message); }
     return;
   }
