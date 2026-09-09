@@ -1268,13 +1268,23 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
      which did exactly that: settings rendered inline at the foot of every page,
      visible and inert. The extra element selector keeps this ahead of it
      whatever the source order. */
+  /* While a dialog is open the page behind it must not scroll — a wheel over
+     the backdrop was moving the list underneath, so closing the sheet left you
+     somewhere else entirely. :has() rather than a JS flag on purpose: the
+     confirm dialog opens ON TOP of settings, and a counter that restored scroll
+     when the first one closed would unlock the page with a sheet still up.
+     scrollbar-gutter keeps the layout from jumping as the bar disappears. */
+  html{scrollbar-gutter:stable}
+  html:has(dialog[open]){overflow:hidden}
+
   dialog.sheet:not([open]){display:none}
   .sheet{border:0;padding:0;background:var(--c-1);color:var(--fg);
          border-radius:var(--r-xl);box-shadow:var(--sh-m);max-height:86dvh}
   .sheet::backdrop{background:rgba(17,24,28,.45);backdrop-filter:blur(6px)}
   :root:not([data-theme="light"]) .sheet::backdrop{background:rgba(0,0,0,.6)}
   .sheet.wide{width:min(880px,94vw);height:min(620px,86dvh);display:flex;flex-direction:column}
-  .sheet.ask{width:min(430px,94vw);padding:22px 24px 18px}
+  .sheet.ask{width:min(430px,94vw);padding:22px 24px 18px;
+       overflow-y:auto;overscroll-behavior:contain}
   /* h2 is uppercase everywhere else, which reads as shouting in a dialog. */
   .sheet.ask h2{font-size:16px;margin:0 0 8px;letter-spacing:-.01em;
        text-transform:none;color:var(--fg);font-weight:650}
@@ -1301,7 +1311,7 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   .snav.on{background:var(--p50);color:var(--p600);font-weight:600}
   :root:not([data-theme="light"]) .snav.on{background:rgba(0,111,238,.18);color:var(--p300)}
   .snav .ico{width:16px;height:16px}
-  .spanes{overflow-y:auto;padding:18px 22px 26px}
+  .spanes{overflow-y:auto;overscroll-behavior:contain;padding:18px 22px 26px}
   .spane h2{font-size:15px;margin:0 0 4px;text-transform:none;letter-spacing:-.01em;color:var(--fg)}
   .spane h3{margin:22px 0 4px}
   .spane .cap{margin-bottom:14px}

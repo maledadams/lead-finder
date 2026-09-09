@@ -46,6 +46,51 @@ await page.keyboard.press('Escape');
 check(await settings.isHidden(), 'Escape closes it');
 
 // ---------------------------------------------------------------------------
+// A sheet holds the page still. A wheel over the backdrop was scrolling the
+// list underneath, so closing the sheet left you somewhere else entirely.
+// ---------------------------------------------------------------------------
+const locked = () => page.evaluate(() => getComputedStyle(document.documentElement).overflow === 'hidden');
+const scrollY = () => page.evaluate(() => window.scrollY);
+const wheelAt = async (x, yy, dy) => {
+  await page.mouse.move(x, yy); await page.mouse.wheel(0, dy); await page.waitForTimeout(200);
+};
+
+await go('/skipped');
+check(!(await locked()), 'the page scrolls normally with no sheet open');
+await wheelAt(550, 400, 300);
+check((await scrollY()) > 0, 'and really does scroll');
+
+await page.locator('[data-act="open-categories"]').click();
+await page.waitForTimeout(250);
+const held = await scrollY();
+await wheelAt(40, 300, 600);
+check((await scrollY()) === held, 'a wheel over the backdrop leaves the page where it was');
+
+// The settings sheet still scrolls its own content.
+const paneMoved = await page.evaluate(async () => {
+  const pane = document.querySelector('.spanes');
+  if (!pane || pane.scrollHeight <= pane.clientHeight) return 'no overflow to test';
+  pane.scrollTop = 150;
+  return pane.scrollTop > 0;
+});
+check(paneMoved === true || paneMoved === 'no overflow to test',
+  `the sheet scrolls its own content (${paneMoved})`);
+
+// The confirm opens ON TOP of settings — a JS counter would unlock here.
+await page.locator('[data-act="del-category"]').first().click();
+await page.waitForTimeout(250);
+check(await locked(), 'still locked with a confirm stacked on settings');
+await page.locator('#confirm-no').click();
+await page.waitForTimeout(250);
+check(await locked(), 'and still locked when only the confirm closes');
+
+await page.keyboard.press('Escape');
+await page.waitForTimeout(250);
+check(!(await locked()), 'unlocked once every sheet is closed');
+await wheelAt(550, 400, 300);
+check((await scrollY()) > held, 'and the page scrolls again afterwards');
+
+// ---------------------------------------------------------------------------
 // Switching profile actually switches
 // ---------------------------------------------------------------------------
 await Promise.all([page.waitForURL('**/*profile=clinics*'), page.selectOption('#profile', 'clinics')]);
