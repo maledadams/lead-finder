@@ -79,10 +79,18 @@ export async function renderDashboard(db, env, opts = {}) {
     : view === 'today'
       ? await todayView(db, pid, day, sending, profile)
       : view === 'metrics'
-        ? await renderMetrics(db, env, { period: opts.period || 'month', profile })
+        ? await renderMetrics(db, env, { period: opts.period || 'month', profile, day: opts.metricDay })
         : await historyView(db, pid, view, { page, q, from, to }, profile);
 
-  return shell({ view, nonce, signedInAs, sending, counts, body, profile, profiles, env });
+  // The settings sheet is on every page, so its categories are read once here.
+  const { results: categories } = await db.prepare(
+    'SELECT * FROM skip_categories WHERE profile_id = ? ORDER BY position, name'
+  ).bind(pid).all();
+
+  return shell({
+    view, nonce, signedInAs, sending, counts, body, profile, profiles, env,
+    categories: categories || [],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +406,9 @@ async function historyView(db, pid, view, { page, q, from, to }, profile) {
 
   return `
 <div class="head">
+  ${view === 'skipped'
+    ? `<button class="lead" data-act="open-categories">${icon('skipped')}<span>Categories</span></button>`
+    : ''}
   <h1>${esc(TITLES[view])}</h1>
   <span class="dim sm">${total} in total</span>
 </div>
@@ -629,7 +640,37 @@ function pager(current, pages) {
  * creating a profile is not something to do by accident while reading a queue,
  * which is exactly what a form in the sidebar invites.
  */
-function settingsPanels({ profile, profiles, sending, env }) {
+/**
+ * One category, collapsed to its name until you open it.
+ *
+ * The trash appears on hover AND on keyboard focus, and stays put on a touch
+ * screen — a control that only exists while a mouse is over it is a control
+ * some people simply do not have.
+ */
+function categoryRow(c) {
+  return `<details class="cat" data-cid="${esc(c.id)}">
+    <summary>
+      <span class="cname">${esc(c.name)}</span>
+      <span class="dim sm">${esc(String(c.keywords || '').split(',').filter(Boolean).length)} keywords</span>
+      <button class="trash" data-act="del-category" data-cid="${esc(c.id)}"
+              aria-label="Delete the category ${esc(c.name)}">${icon('trash')}</button>
+    </summary>
+    <label class="lb" for="cn-${esc(c.id)}">Name</label>
+    <input id="cn-${esc(c.id)}" data-field="cat-name" type="text" maxlength="60" value="${esc(c.name)}">
+    <label class="lb" for="cd-${esc(c.id)}">What puts a skip in here</label>
+    <textarea id="cd-${esc(c.id)}" data-field="cat-definition" rows="3"
+      placeholder="In your own words. This is what the sorting reads.">${esc(c.definition || '')}</textarea>
+    <label class="lb" for="ck-${esc(c.id)}">Keywords, comma separated</label>
+    <input id="ck-${esc(c.id)}" data-field="cat-keywords" type="text" value="${esc(c.keywords || '')}"
+      placeholder="already great, nothing to build">
+    <p class="hint">A reason containing one of these is filed here without asking
+      the model at all — which is why adding the phrases you actually type makes
+      this cost nothing.</p>
+    <div class="acts"><button class="go" data-act="save-category" data-cid="${esc(c.id)}">Save</button></div>
+  </details>`;
+}
+
+function settingsPanels({ profile, profiles, sending, env, categories = [] }) {
   const rows = (profiles.length ? profiles : [profile]).map((p) => `
     <div class="srow" data-pid="${esc(p.id)}">
       <div>
@@ -646,6 +687,27 @@ function settingsPanels({ profile, profiles, sending, env }) {
     </div>`).join('');
 
   return [
+    {
+      id: 'categories',
+      label: 'Skip categories',
+      icon: 'skipped',
+      hint: 'What the metrics page counts when it asks why you skipped things. Yours to define — nothing here is built in, including the four that came with it.',
+      body: `<div class="cats">${categories.map(categoryRow).join('')
+        || '<div class="empty"><b>No categories yet.</b><br>Add one below and your skips will sort themselves into it.</div>'}</div>
+        <h3>New category</h3>
+        <label class="lb" for="ncname">Name</label>
+        <input id="ncname" type="text" maxlength="60" placeholder="Bad timing">
+        <label class="lb" for="ncdef">What puts a skip in here</label>
+        <textarea id="ncdef" rows="3" placeholder="A fine lead at the wrong moment — recently rebuilt, mid redesign, closed for the season."></textarea>
+        <label class="lb" for="nckw">Keywords, comma separated</label>
+        <input id="nckw" type="text" placeholder="just rebuilt, new site, later">
+        <div class="acts">
+          <button id="catcreate" class="go">Add category</button>
+          <button data-act="resort">Re-sort every skip now</button>
+        </div>
+        <p class="hint">Editing a category re-sorts everything filed under the old
+          definition, so the chart never quietly means something else than it did.</p>`,
+    },
     {
       id: 'profiles',
       label: 'Profiles',
@@ -682,7 +744,7 @@ function settingsPanels({ profile, profiles, sending, env }) {
   ];
 }
 
-function shell({ view, nonce, signedInAs, sending, counts, body, profile, profiles, env }) {
+function shell({ view, nonce, signedInAs, sending, counts, body, profile, profiles, env, categories }) {
   // Every link carries the profile, so a middle-click into a new tab lands in
   // the same operation rather than in whichever one is default.
   const qs = `?profile=${encodeURIComponent(profile.slug)}`;
@@ -955,6 +1017,28 @@ function shell({ view, nonce, signedInAs, sending, counts, body, profile, profil
   .spane input,.spane textarea{width:100%;font:inherit;font-size:13.5px;padding:9px 11px;
       border-radius:var(--r-s);border:1px solid var(--line);background:var(--c-2);
       color:var(--fg);margin-bottom:8px;resize:vertical}
+  .cat{border-bottom:1px solid var(--line);margin:0}
+  .cat>summary{display:flex;align-items:center;gap:10px;padding:11px 2px;
+       font-size:13.5px;color:var(--fg);list-style:none}
+  .cat>summary::-webkit-details-marker{display:none}
+  .cat>summary::before{content:'▸';color:var(--muted);font-size:11px;transition:transform .15s}
+  .cat[open]>summary::before{transform:rotate(90deg)}
+  .cat .cname{font-weight:600}
+  .cat .dim{margin-left:auto}
+  .cat[open]{padding-bottom:14px}
+  /* Revealed by hover OR focus, and always present where there is no hover at
+     all. A control that exists only under a mouse is a control some people
+     cannot reach. */
+  .trash{opacity:0;border:0;background:none;padding:5px;color:var(--bad);flex:none}
+  .cat:hover .trash,.cat:focus-within .trash{opacity:1}
+  .trash:hover{background:color-mix(in srgb,var(--bad) 12%,transparent)}
+  .trash .ico{width:16px;height:16px}
+  @media (pointer:coarse){ .trash{opacity:1} }
+
+  /* The Categories button sits at the far left of the head, ahead of the title. */
+  .head .lead{margin-right:2px}
+  .head .lead .ico{width:15px;height:15px}
+
   .srows{border-top:1px solid var(--line)}
   .srow{display:flex;align-items:center;gap:14px;padding:12px 2px;
         border-bottom:1px solid var(--line)}
@@ -1103,7 +1187,7 @@ ${body}
 </main>
 </div>
 <div class="flash" id="flash" role="status" aria-live="polite"></div>
-${settingsDialog(settingsPanels({ profile, profiles, sending, env }))}
+${settingsDialog(settingsPanels({ profile, profiles, sending, env, categories }))}
 ${confirmDialog()}
 
 <script nonce="${esc(nonce)}">
@@ -1265,6 +1349,8 @@ document.addEventListener('change', (ev) => {
   const el = ev.target;
   if (el.dataset.filter) return go({ [el.dataset.filter]: el.value });
   if (el.id === 'day') return go({ day: el.value });
+  // Picking a date on metrics means that day, so it carries the period with it.
+  if (el.id === 'metric-day') return go({ period: 'day', day: el.value });
   // Switching profile is switching account: drop every filter and land on the
   // same page of the other one, rather than carrying a search across.
   if (el.id === 'profile') {
@@ -1288,6 +1374,22 @@ for (const t of document.querySelectorAll('time.d[datetime]')) {
 
 // A new profile. The model writes the categories, the keywords and the scoring
 // brief from this one sentence; nothing here is code the person has to write.
+const catcreate = document.getElementById('catcreate');
+if (catcreate) catcreate.addEventListener('click', async () => {
+  const name = document.getElementById('ncname');
+  if ((name.value || '').trim().length < 2) { flash('Give the category a name'); name.focus(); return; }
+  catcreate.disabled = true;
+  try {
+    await post('/api/categories', {
+      name: name.value,
+      definition: document.getElementById('ncdef').value,
+      keywords: document.getElementById('nckw').value,
+    });
+    flash('Category added');
+    setTimeout(()=>location.reload(), 900);
+  } catch(e){ catcreate.disabled = false; flash(e.message); }
+});
+
 const create = document.getElementById('pcreate');
 if (create) create.addEventListener('click', async () => {
   const name = document.getElementById('pname');
@@ -1316,6 +1418,53 @@ document.addEventListener('click', async (ev) => {
   if(!b) return;
 
   if(b.dataset.act === 'open-settings'){ openSettings(); return; }
+  if(b.dataset.act === 'open-categories'){ openSettings('categories'); return; }
+
+  if(b.dataset.act === 'save-category' || b.dataset.act === 'del-category'){
+    const box = b.closest('.cat');
+    if(b.dataset.act === 'del-category'){
+      // Deleting a category never deletes the skips filed under it — they go
+      // back to unsorted and are sorted again. Say so, so nobody hesitates.
+      const name = box.querySelector('.cname').textContent;
+      const ok = await askConfirm({
+        body: 'The category "' + name + '" will be removed. The skips filed under it keep their reasons and are sorted again on the next pass.',
+        confirmLabel: 'Delete this',
+      });
+      if(!ok) return;
+      b.disabled = true;
+      try {
+        const r = await fetch('/api/categories/' + b.dataset.cid, {method:'DELETE', credentials:'same-origin'});
+        if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'could not delete');
+        flash('Category deleted — its skips will be sorted again');
+        setTimeout(()=>location.reload(), 900);
+      } catch(e){ b.disabled = false; flash(e.message); }
+      return;
+    }
+    b.disabled = true;
+    try {
+      await post('/api/categories', {
+        id: b.dataset.cid,
+        name: box.querySelector('[data-field="cat-name"]').value,
+        definition: box.querySelector('[data-field="cat-definition"]').value,
+        keywords: box.querySelector('[data-field="cat-keywords"]').value,
+      });
+      flash('Saved — skips under the old definition will be sorted again');
+      setTimeout(()=>location.reload(), 1100);
+    } catch(e){ b.disabled = false; flash(e.message); }
+    return;
+  }
+
+  if(b.dataset.act === 'resort'){
+    b.disabled = true; b.textContent = 'Sorting…';
+    try {
+      const r = await post('/api/categories/classify');
+      flash('Sorted ' + (r.by_keyword + r.by_model) + ' of ' + r.pending +
+            ' (' + r.by_keyword + ' by keyword, ' + r.calls + ' model call' +
+            (r.calls === 1 ? '' : 's') + ')');
+    } catch(e){ flash(e.message); }
+    b.disabled = false; b.textContent = 'Re-sort every skip now';
+    return;
+  }
   if(b.dataset.act === 'close-settings'){ settingsEl.close(); return; }
   if(b.dataset.panel){ showPanel(b.dataset.panel); return; }
 

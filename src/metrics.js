@@ -6,6 +6,7 @@
 // cannot change a decision is not here.
 
 import { barsH, columns, donut, funnel, noData, pctLabel, stat, table } from './charts.js';
+import { categoryCounts } from './categories.js';
 
 export const PERIODS = { day: 'Today', month: 'This month', year: 'This year', all: 'All time' };
 
@@ -15,22 +16,42 @@ export const PERIODS = { day: 'Today', month: 'This month', year: 'This year', a
  * Everything is stored as ISO strings, so a string comparison IS a date
  * comparison and no parsing is needed on either side.
  */
-export function bounds(period, now = new Date()) {
+export function bounds(period, now = new Date(), day = null) {
   const iso = now.toISOString();
-  const day = iso.slice(0, 10);
-  if (period === 'day') return { from: day, label: 'today', bucket: 'hour' };
-  if (period === 'month') return { from: `${iso.slice(0, 7)}-01`, label: 'this month', bucket: 'day' };
-  if (period === 'year') return { from: `${iso.slice(0, 4)}-01-01`, label: 'this year', bucket: 'month' };
-  return { from: '0000-01-01', label: 'all time', bucket: 'month' };
+  const today = iso.slice(0, 10);
+  // Open-ended at the top: '9999' sorts above every ISO date, so the same
+  // half-open comparison works for every period and no query needs a special
+  // case. Without an upper bound "a specific day" is not expressible at all.
+  const END = '9999-12-31';
+
+  if (period === 'day') {
+    // Any day, not only today. A named day is a closed window; today is left
+    // open so a send five minutes from now still lands inside it.
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) ? day : today;
+    return {
+      from: d,
+      to: d === today ? END : nextDay(d),
+      label: d === today ? 'today' : `on ${d}`,
+      bucket: 'hour',
+      day: d,
+    };
+  }
+  if (period === 'month') return { from: `${iso.slice(0, 7)}-01`, to: END, label: 'this month', bucket: 'day' };
+  if (period === 'year') return { from: `${iso.slice(0, 4)}-01-01`, to: END, label: 'this year', bucket: 'month' };
+  return { from: '0000-01-01', to: END, label: 'all time', bucket: 'month' };
 }
 
-export async function renderMetrics(db, env, { period = 'month', profile } = {}) {
+/** The day after, so a single day can be asked for as a half-open window. */
+const nextDay = (d) =>
+  new Date(new Date(`${d}T00:00:00Z`).getTime() + 86400_000).toISOString().slice(0, 10);
+
+export async function renderMetrics(db, env, { period = 'month', profile, day = null } = {}) {
   // Nothing on this page may mix profiles: the whole point of switching is that
   // the numbers change. A missing profile fails rather than silently totalling
   // both operations together.
   if (!profile?.id) throw new Error('renderMetrics needs a profile');
   const pid = profile.id;
-  const { from, label, bucket } = bounds(period);
+  const { from, to, label, bucket, day: onDay } = bounds(period, new Date(), day);
 
   // Bucketing happens in SQLite rather than in JS: it keeps the rows returned
   // proportional to the number of buckets instead of the number of sends.
@@ -38,7 +59,7 @@ export async function renderMetrics(db, env, { period = 'month', profile } = {})
     : bucket === 'day' ? 'substr(o.sent_at, 1, 10)'
       : 'substr(o.sent_at, 1, 7)';
 
-  const [outcome, volume, pipeline, byNiche, byScore, spend, skips] = await Promise.all([
+  const [outcome, volume, pipeline, byNiche, byScore, spend, skips, places] = await Promise.all([
     // Every sent email, by what came of it.
     db.prepare(
       `SELECT
@@ -48,17 +69,18 @@ export async function renderMetrics(db, env, { period = 'month', profile } = {})
          SUM(CASE WHEN e.response_status IS NULL      THEN 1 ELSE 0 END) AS awaiting,
          COUNT(*) AS sent
        FROM outreach o JOIN entities e ON e.id = o.entity_id
-       WHERE o.profile_id = ? AND o.status = 'SENT' AND substr(o.sent_at,1,10) >= ?`
-    ).bind(pid, from).first(),
+       WHERE o.profile_id = ? AND o.status = 'SENT' AND substr(o.sent_at,1,10) >= ? AND substr(o.sent_at,1,10) < ?`
+    ).bind(pid, from, to).first(),
 
     db.prepare(
       `SELECT ${bucketExpr} AS label,
               SUM(CASE WHEN o.status = 'SENT' THEN 1 ELSE 0 END) AS sent,
               SUM(CASE WHEN o.status = 'BOUNCED' THEN 1 ELSE 0 END) AS bounced
        FROM outreach o
-       WHERE o.profile_id = ? AND o.sent_at IS NOT NULL AND substr(o.sent_at,1,10) >= ?
+       WHERE o.profile_id = ? AND o.sent_at IS NOT NULL
+         AND substr(o.sent_at,1,10) >= ? AND substr(o.sent_at,1,10) < ?
        GROUP BY label ORDER BY label`
-    ).bind(pid, from).all(),
+    ).bind(pid, from, to).all(),
 
     // The whole funnel, all time — a funnel scoped to a day is meaningless
     // because the stages are reached weeks apart.
@@ -77,9 +99,10 @@ export async function renderMetrics(db, env, { period = 'month', profile } = {})
       `SELECT e.niche AS niche, COUNT(*) AS sent,
               SUM(CASE WHEN e.response_status = 'REPLIED' THEN 1 ELSE 0 END) AS replied
        FROM outreach o JOIN entities e ON e.id = o.entity_id
-       WHERE o.profile_id = ? AND o.status = 'SENT' AND substr(o.sent_at,1,10) >= ?
+       WHERE o.profile_id = ? AND o.status = 'SENT'
+         AND substr(o.sent_at,1,10) >= ? AND substr(o.sent_at,1,10) < ?
        GROUP BY e.niche HAVING sent > 0 ORDER BY sent DESC LIMIT 8`
-    ).bind(pid, from).all(),
+    ).bind(pid, from, to).all(),
 
     // Does the score predict a reply? If it does not, the scoring is decoration.
     db.prepare(
@@ -93,22 +116,51 @@ export async function renderMetrics(db, env, { period = 'month', profile } = {})
               SUM(CASE WHEN e.response_status = 'REPLIED' THEN 1 ELSE 0 END) AS replied
        FROM outreach o JOIN entities e ON e.id = o.entity_id
        WHERE o.profile_id = ? AND o.status = 'SENT' AND e.score IS NOT NULL
-         AND substr(o.sent_at,1,10) >= ?
+         AND substr(o.sent_at,1,10) >= ? AND substr(o.sent_at,1,10) < ?
        GROUP BY band`
-    ).bind(pid, from).all(),
+    ).bind(pid, from, to).all(),
 
     db.prepare(
       `SELECT metric, SUM(used) AS used FROM budget
-       WHERE profile_id = ? AND day >= ? GROUP BY metric ORDER BY used DESC`
-    ).bind(pid, from).all(),
+       WHERE profile_id = ? AND day >= ? AND day < ? GROUP BY metric ORDER BY used DESC`
+    ).bind(pid, from, to).all(),
 
+    // Your categories, not the raw sentences. See src/categories.js.
+    categoryCounts(db, pid, from, to),
+
+    // Where the leads actually came from. location_text is "City, ST" for 1,934
+    // of the 1,958 rows; the metro key is the fallback for the older ones that
+    // predate the state suffix.
     db.prepare(
-      `SELECT f.reason AS reason, COUNT(*) AS n FROM feedback f
-       WHERE f.profile_id = ? AND f.decision IN ('SKIPPED','BLOCKED')
-         AND f.reason IS NOT NULL AND substr(f.created_at,1,10) >= ?
-       GROUP BY f.reason ORDER BY n DESC LIMIT 6`
-    ).bind(pid, from).all(),
+      `SELECT
+         CASE
+           WHEN location_text LIKE '%, __' THEN substr(location_text, -2)
+           WHEN discovery_source LIKE 'osm:%' AND substr(discovery_source, -3, 1) = '-'
+             THEN upper(substr(discovery_source, -2))
+           ELSE NULL END AS state,
+         COALESCE(NULLIF(location_text, ''), replace(discovery_source, 'osm:', '')) AS place,
+         COUNT(*) AS n
+       FROM entities
+       WHERE profile_id = ? AND first_seen_at >= ? AND first_seen_at < ?
+       GROUP BY state, place`
+    ).bind(pid, from, to).all(),
   ]);
+
+  // Rolled up here rather than in SQL: one pass over a few hundred rows is
+  // cheaper than a second query, and the cities have to be kept anyway for the
+  // per-state breakdown underneath each bar.
+  const states = new Map();
+  for (const row of places.results || []) {
+    const key = row.state || 'Unknown';
+    if (!states.has(key)) states.set(key, { state: key, n: 0, cities: [] });
+    const s = states.get(key);
+    s.n += Number(row.n) || 0;
+    if (row.place) s.cities.push({ place: row.place, n: Number(row.n) || 0 });
+  }
+  const byState = [...states.values()]
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 8)
+    .map((s) => ({ ...s, cities: s.cities.sort((a, b) => b.n - a.n).slice(0, 12) }));
 
   const o = outcome || {};
   const sent = Number(o.sent) || 0;
@@ -145,7 +197,13 @@ export async function renderMetrics(db, env, { period = 'month', profile } = {})
     ${Object.entries(PERIODS).map(([k, v]) =>
     `<a class="sgi${k === period ? ' on' : ''}" href="/metrics?period=${k}"${k === period ? ' aria-current="page"' : ''}>${v}</a>`).join('')}
   </nav>
+  <label class="lb vh" for="metric-day">Show a particular day</label>
+  <input id="metric-day" type="date" value="${escLabel(onDay || '')}" data-filter="day"
+         max="${escLabel(new Date().toISOString().slice(0, 10))}"
+         title="Show a particular day">
 </div>
+<p class="cap">Days run midnight to midnight UTC, which is how the timestamps are
+  stored — not your local midnight.</p>
 
 <div class="grid stats">
   ${stat('Reply rate', pctLabel(replied, sent), {
@@ -236,11 +294,28 @@ export async function renderMetrics(db, env, { period = 'month', profile } = {})
   </section>
 </div>
 
-${(skips.results || []).length ? `<section class="card">
-  <h3>Why you skipped things</h3>
-  <p class="cap">Your own words, most frequent first — this is what teaches the scoring.</p>
-  ${barsH((skips.results || []).map((r) => ({ label: trimTo(r.reason, 90), value: r.n })), { slot: 2 })}
-</section>` : ''}
+<div class="grid two">
+  <section class="card">
+    <h3>Why you skipped things</h3>
+    <p class="cap">Your categories, busiest first ${escLabel(label)}. Edit them in
+      Settings — the bars follow whatever you define there.</p>
+    ${(skips || []).length
+      ? barsH(skips.map((r) => ({ label: trimTo(r.label, 40), value: r.n })), { slot: 2 })
+      : noData('Nothing skipped in this period.')}
+  </section>
+
+  <section class="card">
+    <h3>Where the leads come from</h3>
+    <p class="cap">States found ${escLabel(label)}, busiest first. Open one for its cities.</p>
+    ${byState.length
+      ? `${barsH(byState.map((r) => ({ label: r.state, value: r.n })), { slot: 3 })}
+         ${byState.map((r) => `<details class="tbl">
+           <summary>${escLabel(r.state)} — ${r.n} lead${r.n === 1 ? '' : 's'}</summary>
+           ${table(['City', 'Leads'], r.cities.map((c) => [trimTo(c.place, 42), c.n]))}
+         </details>`).join('')}`
+      : noData('No leads discovered in this period.')}
+  </section>
+</div>
 `;
 }
 

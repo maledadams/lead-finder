@@ -297,7 +297,11 @@ CREATE TABLE IF NOT EXISTS feedback (
   niche_at_time TEXT,
   created_at    TEXT NOT NULL,
   applied       INTEGER NOT NULL DEFAULT 0,  -- folded into lessons yet?
-  profile_id  TEXT              -- migration 008
+  profile_id    TEXT,             -- migration 008
+  -- migration 011. SET NULL, not CASCADE: deleting a category must return its
+  -- skips to unsorted, never delete the reasons a person typed.
+  skip_category_id TEXT REFERENCES skip_categories(id) ON DELETE SET NULL,
+  category_version INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_feedback_entity   ON feedback(entity_id);
@@ -389,7 +393,8 @@ CREATE TABLE IF NOT EXISTS profiles (
   budgets       TEXT,   -- {fetch, ai, source, browser} per day
   discovery     TEXT,   -- {osm:{shop,craft,amenity,healthcare,office},exclude,metros}
   created_at    TEXT NOT NULL,
-  updated_at    TEXT NOT NULL
+  updated_at    TEXT NOT NULL,
+  categories_version INTEGER NOT NULL DEFAULT 1  -- migration 011
 );
 
 CREATE INDEX IF NOT EXISTS idx_profiles_active ON profiles(active, is_default);
@@ -410,3 +415,52 @@ INSERT OR IGNORE INTO profiles (id, slug, name, active, is_default, brief, creat
 VALUES ('p-creative', 'creative', 'Creative businesses', 1, 1,
         'Founder-led creative businesses in the United States: makers, studios, independent labels and small brands with an identity of their own.',
         '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+
+-- ---------------------------------------------------------------------------
+-- skip_categories — your buckets for why a lead was passed on (migration 011)
+--
+-- Nothing here is hardcoded. The four seeded below are data, editable and
+-- deletable like any you add; the code knows only that categories exist. A skip
+-- is filed by its keywords first, which is free, and by one batched model call
+-- otherwise. The answer is stamped with categories_version, so editing a
+-- definition re-sorts everything filed under the old one instead of leaving the
+-- chart quietly wrong.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS skip_categories (
+  id          TEXT PRIMARY KEY,
+  profile_id  TEXT NOT NULL,
+  slug        TEXT NOT NULL,          -- stable id the model answers with
+  name        TEXT NOT NULL,          -- how it reads on the metrics bar
+  definition  TEXT,                   -- what puts a skip in here, in your words
+  keywords    TEXT,                   -- comma separated; a match skips the model
+  position    INTEGER NOT NULL DEFAULT 0,
+  active      INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skip_cat_slug ON skip_categories(profile_id, slug);
+CREATE INDEX IF NOT EXISTS idx_skip_cat_active ON skip_categories(profile_id, active, position);
+CREATE INDEX IF NOT EXISTS idx_feedback_category ON feedback(profile_id, skip_category_id);
+
+INSERT OR IGNORE INTO skip_categories
+  (id, profile_id, slug, name, definition, keywords, position, active, created_at, updated_at)
+SELECT p.id || ':not_a_fit', p.id, 'not_a_fit', 'Not a fit',
+       'The business is the wrong kind for this profile — wrong trade, wrong size, a chain, an agency, or simply not who this operation is for.',
+       'not my kind,wrong kind,not a fit,too corporate,chain,franchise,agency,not the right',
+       1, 1, '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z' FROM profiles p
+UNION ALL
+SELECT p.id || ':no_value', p.id, 'no_value', 'No value',
+       'There is nothing worth building for them. The site is already good, or the work they need is not work this offer covers.',
+       'already great,already good,site is fine,nothing to build,no opportunity,no need,nothing obvious',
+       2, 1, '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z' FROM profiles p
+UNION ALL
+SELECT p.id || ':bad_timing', p.id, 'bad_timing', 'Bad timing',
+       'A fine lead, wrong moment — recently rebuilt, mid redesign, closed for the season, or otherwise worth revisiting later.',
+       'just rebuilt,recently redesigned,mid redesign,new site,closed,seasonal,later,not right now,too soon',
+       3, 1, '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z' FROM profiles p
+UNION ALL
+SELECT p.id || ':difficult', p.id, 'difficult', 'Difficult',
+       'Reachable but not worth the friction — no way in, gatekept, a committee, an unresponsive contact, or a budget that will not stretch.',
+       'no contact,cannot reach,gatekeeper,committee,no budget,too cheap,too big,hard to reach,no email',
+       4, 1, '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z' FROM profiles p;

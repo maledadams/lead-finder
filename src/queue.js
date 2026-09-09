@@ -9,6 +9,7 @@ import { newId, nowIso } from './entity.js';
 import { composeDraft } from './outreach.js';
 import { deriveLessons } from './learning.js';
 import { canReceiveMail } from './mx.js';
+import { classifyPending } from './categories.js';
 
 export function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -192,6 +193,14 @@ export async function buildQueue(env, db, profile, { dryRun = false } = {}) {
   // Turn yesterday's decisions into rules before tomorrow's leads are judged.
   try {
     stats.learning = await deriveLessons(env, db, profileId);
+    // Sorting skips into their categories rides this pass rather than adding a
+    // scheduled run of its own. Keyword-first and version-stamped, so in a
+    // normal week it is one model call or none at all.
+    try {
+      stats.categories = await classifyPending(env, db, profileId);
+    } catch (err) {
+      stats.categories = { error: String(err?.message || err).slice(0, 120) };
+    }
   } catch (err) {
     stats.learning = { error: String(err?.message || err).slice(0, 120) };
   }

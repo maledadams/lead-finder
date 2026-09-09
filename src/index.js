@@ -22,6 +22,9 @@ import {
 } from './profiles.js';
 import { calConfigured, upcomingBookings } from './cal.js';
 import {
+  classifyPending, deleteCategory, listCategories, upsertCategory,
+} from './categories.js';
+import {
   completeLogin, exchangeKeyForSession, googleConfigured, logout,
   sessionFrom, startLogin, verifySession,
 } from './auth.js';
@@ -394,6 +397,7 @@ export default {
           from: dateParam(url.searchParams.get('from')),
           to: dateParam(url.searchParams.get('to')),
           period: PERIODS[url.searchParams.get('period')] ? url.searchParams.get('period') : 'month',
+          metricDay: dateParam(url.searchParams.get('day')),
         });
         return new Response(html, {
           headers: {
@@ -834,6 +838,32 @@ export default {
       if (url.pathname === '/api/run/queue' && request.method === 'POST') {
         const dryRun = url.searchParams.get('dry') === '1';
         return json(await buildQueue(env, db, profile, { dryRun }));
+      }
+
+      // ---- skip categories ----------------------------------------------
+      if (url.pathname === '/api/categories' && request.method === 'GET') {
+        return json(await listCategories(db, pid, { includeInactive: true }));
+      }
+
+      // Create or edit. Either way the category version is bumped, so skips
+      // filed under the old definition are sorted again rather than left wrong.
+      if (url.pathname === '/api/categories' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const res = await upsertCategory(db, pid, body);
+        return json(res, res.ok ? 200 : (res.error === 'not-found' ? 404 : 400));
+      }
+
+      const category = url.pathname.match(/^\/api\/categories\/([\w:-]+)$/);
+      if (category && request.method === 'DELETE') {
+        const res = await deleteCategory(db, pid, category[1]);
+        return json(res, res.ok ? 200 : 404);
+      }
+
+      // Runs on every queue build; exposed so an edit can be applied at once.
+      if (url.pathname === '/api/categories/classify' && request.method === 'POST') {
+        return json(await classifyPending(env, db, pid, {
+          limit: Math.min(Number(url.searchParams.get('limit')) || 60, 200),
+        }));
       }
 
       // ---- profiles -----------------------------------------------------
