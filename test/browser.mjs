@@ -6,8 +6,9 @@
 // stayed green. A rendered string is not a working page.
 //
 // Not part of `pnpm test` — it needs a dev server and a browser. Run it with:
+//   pnpm run dev:test      (in one shell)
+//   pnpm run test:seed      (fixture data, dated relative to today)
 //   pnpm run test:browser
-// after `pnpm exec wrangler dev --local --port 8787 --var REQUIRE_ACCESS:false`.
 
 import { chromium } from 'playwright';
 import { readFileSync } from 'node:fs';

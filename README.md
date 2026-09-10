@@ -201,6 +201,7 @@ string is not a working page.
 
 ```bash
 pnpm exec playwright install chromium   # once
+pnpm run test:seed                      # fixture data, dated relative to today
 pnpm run test:browser
 ```
 
