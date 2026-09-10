@@ -115,18 +115,16 @@ REQUIRE_ACCESS = "true"
 #   ALLOWED_EMAILS   who may sign in           (personal addresses)
 #   CF_ACCOUNT_ID    used for browser renders  (identifies the account)
 #   SENDER_NAME  SENDER_EMAIL  SENDER_POSTAL_ADDRESS
-#   DASHBOARD_KEY  SESSION_SECRET  ZOHO_CLIENT_SECRET  GOOGLE_CLIENT_SECRET
+#   DASHBOARD_KEY  SESSION_SECRET  ZOHO_CLIENT_ID  ZOHO_CLIENT_SECRET
 
 # Zoho Mail sending. The client secret is a secret; the refresh token is
 # obtained once via /api/zoho/connect and stored in D1.
-ZOHO_CLIENT_ID = "REPLACE_WITH_YOUR_ZOHO_CLIENT_ID"
 ZOHO_REGION = "com"          # com | eu | in | au | jp
 DAILY_SEND_CAP = "30"        # a hard ceiling no bug can exceed
 
 # Google sign-in. Everyone here gets their own login and their decisions are
-# recorded under their own address. GOOGLE_CLIENT_SECRET and SESSION_SECRET
+# recorded under their own address. SESSION_SECRET
 # are secrets, not vars — set them with `wrangler secret put`.
-GOOGLE_CLIENT_ID = "REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID"
 USER_AGENT = "LeadFinderBot/0.1 (+https://example.com; hello@example.com)"  # change this
 
 # Sending identity, used in outreach drafts and the CAN-SPAM footer.

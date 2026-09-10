@@ -40,8 +40,21 @@ function region(env) {
   return REGIONS[(env.ZOHO_REGION || 'com').toLowerCase()] || REGIONS.com;
 }
 
+/**
+ * Whether sending can even be attempted.
+ *
+ * A placeholder counts as unconfigured, exactly as it does for Google sign-in.
+ * Without that check a REPLACE_WITH_ value flows straight into an OAuth request
+ * and Zoho answers "invalid client", which says nothing about where to look —
+ * that shipped for a day and broke sending on every profile.
+ */
+const PLACEHOLDER = /^(?:replace|placeholder|todo|changeme|set-?me|xxx)/i;
+
 export function zohoConfigured(env) {
-  return Boolean(env.ZOHO_CLIENT_ID && env.ZOHO_CLIENT_SECRET);
+  const id = env.ZOHO_CLIENT_ID || '';
+  const secret = env.ZOHO_CLIENT_SECRET || '';
+  if (!id || !secret) return false;
+  return !PLACEHOLDER.test(id) && !PLACEHOLDER.test(secret);
 }
 
 // --- settings ---------------------------------------------------------------

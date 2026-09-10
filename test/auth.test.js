@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { allowedEmails, googleConfigured, verifySession, readCookie } from '../src/auth.js';
+import { allowedEmails, verifySession, readCookie } from '../src/auth.js';
 
 const ENV = {
   GOOGLE_CLIENT_ID: '123-abc.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'GOCSPX-csec',
@@ -13,12 +13,6 @@ test('the allowlist is parsed, trimmed and lowercased', () => {
   assert.deepEqual(allowedEmails({}), []);
 });
 
-test('google sign-in is only considered configured when fully configured', () => {
-  assert.equal(googleConfigured(ENV), true);
-  assert.equal(googleConfigured({ ...ENV, GOOGLE_CLIENT_SECRET: '' }), false);
-  assert.equal(googleConfigured({ ...ENV, SESSION_SECRET: '' }), false);
-  assert.equal(googleConfigured({}), false);
-});
 
 test('a forged or tampered session is rejected', async () => {
   assert.equal(await verifySession(ENV, null), null);
@@ -72,22 +66,6 @@ test('cookies are read by exact name', () => {
   assert.equal(readCookie({ headers: { get: () => '' } }, 'x'), null);
 });
 
-test('placeholder Google credentials count as not configured', () => {
-  const base = { SESSION_SECRET: 'x', ALLOWED_EMAILS: 'a@b.com' };
-  // These were live in production and produced a sign-in button that could
-  // only ever fail.
-  assert.equal(googleConfigured({ ...base,
-    GOOGLE_CLIENT_ID: 'REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID',
-    GOOGLE_CLIENT_SECRET: 'placeholder-set-me' }), false);
-  // A real client id always carries Google's suffix.
-  assert.equal(googleConfigured({ ...base,
-    GOOGLE_CLIENT_ID: '123-abc.apps.googleusercontent.com',
-    GOOGLE_CLIENT_SECRET: 'GOCSPX-realsecret' }), true);
-  // A plausible-looking but wrong id (e.g. a pasted UUID) is refused.
-  assert.equal(googleConfigured({ ...base,
-    GOOGLE_CLIENT_ID: '6b0b2f2a-f92e-460e-b76e-57af536fd14d',
-    GOOGLE_CLIENT_SECRET: 'something' }), false);
-});
 
 test('Zoho is only considered usable with real credentials', async () => {
   const { zohoConfigured, ZOHO_SCOPES, authorizeUrl } = await import('../src/zoho.js');
@@ -137,4 +115,17 @@ test('an unset SESSION_SECRET fails with something a person can act on', async (
     { SESSION_SECRET: 'a-long-enough-secret-value' }, 'https://x.test/?key=a'
   );
   assert.equal(good.status, 302, 'a configured install still signs people in');
+});
+
+test('there is no sign-in of our own left to configure', async () => {
+  // Cloudflare Access IS the login. The Google flow behind it was unreachable
+  // and only added two more credentials for somebody to fill in.
+  const auth = await import('../src/auth.js');
+  for (const gone of ['googleConfigured', 'startLogin', 'completeLogin', 'loginPage']) {
+    assert.equal(auth[gone], undefined, gone + ' should have gone with the Google flow');
+  }
+  // What the key-for-cookie exchange needs is still here.
+  for (const kept of ['verifySession', 'sessionFrom', 'exchangeKeyForSession', 'logout', 'allowedEmails']) {
+    assert.equal(typeof auth[kept], 'function', kept + ' is still used');
+  }
 });

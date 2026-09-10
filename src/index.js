@@ -34,8 +34,7 @@ import {
 } from './docs.js';
 import { docEditor, docPage, docsIndex, folderPage } from './docsview.js';
 import {
-  completeLogin, exchangeKeyForSession, googleConfigured, logout,
-  sessionFrom, startLogin, verifySession,
+  exchangeKeyForSession, logout, sessionFrom, verifySession,
 } from './auth.js';
 import {
   authorizeUrl, exchangeCode, fetchSignature, sendMail, sentToday, signState,
@@ -303,27 +302,20 @@ export default {
       );
     }
 
-    // ---- Google sign-in -------------------------------------------------
-    // These three must sit outside the auth gate, or nobody could ever reach
-    // them to sign in.
-    if (url.pathname.startsWith('/auth/')) {
-      if (!googleConfigured(env)) {
-        return json({ error: 'google sign-in is not configured' }, 503);
-      }
-      if (url.pathname === '/auth/login') return startLogin(env, request);
-      if (url.pathname === '/auth/callback') return completeLogin(env, request);
-      if (url.pathname === '/auth/logout') return logout();
-      return json({ error: 'not found' }, 404);
-    }
+    // ---- sign out --------------------------------------------------------
+    // Outside the auth gate, because signing out has to work from a session
+    // that is being thrown away. Cloudflare Access is the login; there is no
+    // sign-in of our own to reach.
+    if (url.pathname === '/auth/logout') return logout();
 
     // When REQUIRE_ACCESS is on, a request must arrive through Cloudflare
     // Access. Anything reaching the Worker another way is refused, which closes
     // the bypass that would otherwise make Access decorative.
     //
-    // Deliberately placed AFTER the OAuth callbacks. Those are requests from
-    // Zoho's and Google's servers, which have no Access session and never
-    // could; gating them here would 403 the callback and make reconnecting
-    // Zoho impossible. Each is already protected by its own signed state.
+    // Deliberately placed AFTER the Zoho callback. That is a request from
+    // Zoho's servers, which have no Access session and never could; gating it
+    // here would 403 the callback and make reconnecting Zoho impossible. It is
+    // already protected by its own signed state.
     if (env.REQUIRE_ACCESS === 'true' && !hasAccessAssertion(request)) {
       return json({ error: 'access required' }, 403);
     }

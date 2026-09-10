@@ -336,3 +336,75 @@ test('a newly created profile is immediately usable', async () => {
   const seeded = raw.prepare('SELECT COUNT(*) n FROM keywords WHERE profile_id = ?').get(made.id);
   assert.ok(seeded.n > 0, 'discovery starts on the next crawl, not after a manual step');
 });
+
+// ---------------------------------------------------------------------------
+// 6. A placeholder that reaches a deploy is a live outage.
+//
+//    Genericising the repository, I replaced three deployment values with
+//    REPLACE_WITH_ placeholders and restored two. The third was ZOHO_CLIENT_ID,
+//    so every deploy for a day shipped a client id that does not exist and
+//    sending failed with a bare "invalid client" — nothing in the app said why,
+//    and no test could fail, because the value was syntactically fine.
+// ---------------------------------------------------------------------------
+
+test('no placeholder value can reach a deploy', () => {
+  const toml = read('wrangler.toml');
+  // A placeholder is only safe where the code RECOGNISES it and turns the
+  // feature off. zohoConfigured() did not, which is how "invalid client"
+  // reached the Send button. Anything listed here must be covered by such a
+  // check; the list is empty because the credentials all moved to secrets.
+  const HANDLED = [];
+
+  const offenders = toml.split('\n')
+    .map((line, i) => [i + 1, line])
+    .filter(([, line]) => !line.trim().startsWith('#'))
+    .filter(([, line]) => /REPLACE_WITH|YOUR-NAME|CHANGEME|xxxx/i.test(line))
+    .filter(([, line]) => !HANDLED.some((k) => line.trim().startsWith(k)))
+    .map(([i, line]) => `wrangler.toml:${i}: ${line.trim()}`);
+
+  assert.deepEqual(offenders, [],
+    'a placeholder in a deployed value breaks the thing it configures, silently');
+});
+
+test('no credential is committed to the repository', () => {
+  const toml = read('wrangler.toml');
+  const settings = toml.split('\n')
+    .filter((l) => !l.trim().startsWith('#') && l.includes('='))
+    .map((l) => l.split('=')[0].trim());
+
+  // Anything that names or authenticates an account is a secret, set with
+  // `wrangler secret put`, never a [vars] entry. The Zoho CLIENT ID is included
+  // deliberately: it is not a password, but it names one specific application
+  // and has no business in a public repository.
+  const mustBeSecret = [
+    'ZOHO_CLIENT_ID', 'ZOHO_CLIENT_SECRET', 'DASHBOARD_KEY', 'SESSION_SECRET',
+    'CAL_API_KEY', 'CF_ACCOUNT_ID', 'CF_API_TOKEN', 'SENDER_EMAIL',
+    'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
+  ];
+  const leaked = mustBeSecret.filter((k) => settings.includes(k));
+  assert.deepEqual(leaked, [], 'these belong in wrangler secret put, not in the config');
+
+  // And no value anywhere that looks like a live credential.
+  const shapes = [
+    [/\b1000\.[A-Z0-9]{20,}\b/, 'a Zoho client id'],
+    [/\bcal_live_[a-f0-9]{16,}\b/, 'a Cal.com key'],
+    [/\b[0-9a-f]{32}\b/, 'a 32-hex token'],
+  ];
+  for (const [re, what] of shapes) {
+    const hit = toml.split('\n').find((l) => !l.trim().startsWith('#') && re.test(l));
+    assert.equal(hit, undefined, `${what} is committed: ${hit}`);
+  }
+});
+
+test('a placeholder credential disables its feature instead of being used', async () => {
+  const { zohoConfigured } = await import('../src/zoho.js');
+
+  // The dashboard asks these before offering the button. Answering "yes" for a
+  // placeholder is what turns a misconfiguration into "invalid client" at the
+  // moment somebody presses Send.
+  assert.equal(zohoConfigured({ ZOHO_CLIENT_ID: 'REPLACE_WITH_YOUR_ZOHO_CLIENT_ID', ZOHO_CLIENT_SECRET: 'x' }), false);
+  assert.equal(zohoConfigured({ ZOHO_CLIENT_ID: '1000.ABCDEFGH', ZOHO_CLIENT_SECRET: 'CHANGEME' }), false);
+  assert.equal(zohoConfigured({ ZOHO_CLIENT_ID: '', ZOHO_CLIENT_SECRET: 'x' }), false);
+  assert.equal(zohoConfigured({ ZOHO_CLIENT_ID: '1000.ABCDEFGH', ZOHO_CLIENT_SECRET: 'real' }), true);
+
+});

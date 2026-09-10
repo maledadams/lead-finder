@@ -152,11 +152,13 @@ pnpm run db:init
 # 3. Secrets. None of these belong in a file you commit.
 pnpm exec wrangler secret put DASHBOARD_KEY          # any long random string
 pnpm exec wrangler secret put SESSION_SECRET         # any long random string
+pnpm exec wrangler secret put ZOHO_CLIENT_ID         # from your Zoho API console
 pnpm exec wrangler secret put ZOHO_CLIENT_SECRET     # from your Zoho API console
 pnpm exec wrangler secret put CAL_BOOKING_URL        # optional: your booking link
 pnpm exec wrangler secret put CAL_API_KEY            # optional: shows bookings in the dashboard
 
-# 4. Edit wrangler.toml — the header lists exactly which lines to change.
+# 4. Edit wrangler.toml — only the database id and your hostname. No
+#    credential lives in that file; everything above is a secret.
 #    SENDER_NAME, SENDER_EMAIL and SENDER_POSTAL_ADDRESS are required:
 #    the postal address is not optional, CAN-SPAM requires it in every email.
 
