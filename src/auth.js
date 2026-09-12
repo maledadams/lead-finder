@@ -172,7 +172,3 @@ function decodeJwtPayload(jwt) {
   }
 }
 
-function deny(message, status = 401) {
-  const res = loginPage(message);
-  return new Response(res.body, { status, headers: res.headers });
-}
